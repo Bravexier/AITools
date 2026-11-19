@@ -39,7 +39,7 @@ const monde = (on: On, un: Monde) => {
   const ecritures: Record<string, unknown>[] = []
   const soumis: string[] = []
   const fermes: string[] = []
-  mock.clock(on, { now: 1_000_000 })
+  const temps = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('session.id', () => ({ value: 'session-de-test' }))
   on('session.cwd', () => ({ value: '/depot' }))
@@ -76,7 +76,7 @@ const monde = (on: On, un: Monde) => {
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
 
-  return { ecritures, soumis, fermes }
+  return { ecritures, soumis, fermes, temps }
 }
 
 const DEMANDE = {
@@ -176,6 +176,13 @@ test('en local, le panneau suffit : ni page, ni GitHub, clôture à la demande',
     origin: { kind: 'composer' },
     presentation: { isFullscreen: false, columns: 80 },
   })
+  const rouvert = await $.command.run({
+    command: 'suivi',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: false, columns: 80 },
+  })
+  expect(rouvert.text).toBe('Suivi ouvert.')
   expect(clos.text).toBe('Suivi clos.')
   expect(fermes).toEqual(['suivi-demande'])
   expect(ecritures).toEqual([])
@@ -225,6 +232,40 @@ test('en cloud, sans panneau : la page est demandée, tenue à jour, et la fusio
   // La page est détachée : la demande suivante en redemande une.
   const suivante = await $.tool.call({ ...DEMANDE, but: 'Autre demande' })
   expect(dit(suivante)).toMatch(/aucune page reliée/)
+})
+
+const COMMANDE = { command: 'suivi', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as const
+
+test('sans panneau, /suivi mène à la page : il la fait publier, puis donne son adresse', async ($, on) => {
+  const { ecritures, soumis, temps } = monde(on, { estCloud: true, panneau: false })
+  await demarrer($)
+
+  const sansPage = await $.command.run({ ...COMMANDE, args: '' })
+  expect(sansPage.text).toMatch(/en cours de publication/)
+  expect(sansPage.text).not.toMatch(/Suivi ouvert/)
+  // La demande part au battement suivant, pas depuis la commande.
+  expect(soumis).toEqual([])
+  await temps.advance(5000)
+  expect(soumis).toHaveLength(1)
+  expect(soumis[0]).toMatch(/page\/suivi-demande\.html/)
+
+  // La page se relie même sans demande en cours.
+  const reliee = await $.tool.call({ tool: OUTIL, page: PAGE })
+  expect(dit(reliee)).toMatch(/Page reliée/)
+  expect(ecritures).toHaveLength(1)
+
+  const avecPage = await $.command.run({ ...COMMANDE, args: '' })
+  expect(avecPage.text).toContain(PAGE)
+  expect(soumis).toHaveLength(1)
+
+  // /suivi clore demande lui-même la suppression : la sortie d'une commande ne lance pas de tour.
+  await $.tool.call({ ...DEMANDE })
+  const clos = await $.command.run({ ...COMMANDE, args: 'clore' })
+  expect(clos.text).toMatch(/Suivi clos/)
+  await temps.advance(5000)
+  expect(soumis).toHaveLength(2)
+  expect(soumis[1]).toMatch(/Supprime la page de suivi/)
+  expect(soumis[1]).toContain(PAGE)
 })
 
 test('reprendre la même demande ne remet ni le début ni le temps à zéro', async ($, on) => {

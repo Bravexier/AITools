@@ -334,17 +334,25 @@ const cloturer = async ($: EngineInterface, motif: string, direct = false): Prom
   return adresse === undefined ? undefined : demandeDeSuppression(adresse)
 }
 
+/** Ce que le mod doit encore demander à la session, hors de tout hook qui retient un tour. */
+const aDemander: string[] = []
+
 /**
- * Demande à la session de supprimer la page d'un suivi clos hors de sa vue.
- * Jamais depuis un hook `tool.call` ni `turn.start` : la demande attendrait le
- * tour que ce hook retient.
+ * Remet à la session ce qui l'attend : la page d'un suivi clos à supprimer,
+ * une page à publier. Appelé à la fin d'un tour et au battement, jamais depuis
+ * un hook `tool.call`, `turn.start` ou `command.run` : la demande attendrait
+ * le tour que ce hook retient.
  */
 const annoncer = async ($: EngineInterface) => {
   const { aSupprimer } = await read($, page)
-  if (aSupprimer === undefined) return
-  await update($, page, () => ({}))
-  await sauver($)
-  await $.prompt.submit({ text: demandeDeSuppression(aSupprimer) })
+  if (aSupprimer !== undefined) {
+    await update($, page, () => ({}))
+    await sauver($)
+    aDemander.push(demandeDeSuppression(aSupprimer))
+  }
+  for (let text = aDemander.shift(); text !== undefined; text = aDemander.shift()) {
+    await $.prompt.submit({ text })
+  }
 }
 
 const entrerEnInstallation = async ($: EngineInterface, site: Installation) => {
@@ -405,15 +413,25 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'suivi' }, async ($, e) => {
+    // Ce que la commande laisse à demander part juste après elle, tant que la session est éveillée.
+    $.clock.after(300, () => void annoncer($).catch(() => undefined))
     if (e.args.trim().toLowerCase() === 'clore') {
       if ((await read($, suivi)).demande === null) return { text: 'Aucune demande suivie : rien à clore.' }
-      const suite = await cloturer($, 'à votre demande', true)
+      // La sortie d'une commande ne lance pas de tour : la suppression de la page est demandée au battement suivant.
+      const suite = await cloturer($, 'à votre demande')
 
-      return { text: suite ?? 'Suivi clos.' }
+      return { text: suite === undefined ? 'Suivi clos.' : 'Suivi clos. La session supprime sa page : confirmez dans l’application.' }
     }
-    await $.ui.open({ id: PANNEAU, title: TITRE })
+    const place = await $.ui.open({ id: PANNEAU, title: TITRE })
+    if (place.isPlaced) return { text: 'Suivi ouvert.' }
+    // Aucun panneau ne se dessine ici (session cloud) : le suivi est une page.
+    const adresse = (await read($, page)).url
+    if (adresse !== undefined) return { text: `Aucun panneau dans cette session : le suivi est sur la page ${adresse}` }
+    aDemander.push(
+      `[suivi-demande] Le propriétaire demande à voir le suivi et aucun panneau ne se dessine dans cette session. Lis puis publie telle quelle ${$.plugin.root}/page/suivi-demande.html (outil Artifact, \`capabilities: {"db": {}, "user": {}}\`, icône \`activity\`), donne son adresse à l'outil ${OUTIL} dans \`page\`, puis donne-lui le lien en une phrase.`,
+    )
 
-    return { text: 'Suivi ouvert.' }
+    return { text: 'Aucun panneau dans cette session : la page de suivi est en cours de publication.' }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -504,7 +522,16 @@ export const register: Register = on => {
     // `nouvelle` avec le même but rétablit le suivi : ni le début ni le temps mesuré ne repartent de zéro.
     const base = e.nouvelle === true && butDonne !== undefined && butDonne !== avant?.but ? null : avant
     const but = butDonne ?? base?.but
-    if (but === undefined) return { deny: 'Donne `but` : aucune demande n’est suivie pour l’instant.' }
+    if (but === undefined) {
+      // Relier une page sans demande : elle affiche les agents, et attend la prochaine demande.
+      const seule = texte(e.page)
+      if (seule === undefined) return { deny: 'Donne `but` : aucune demande n’est suivie pour l’instant.' }
+      await update($, page, () => ({ url: seule }))
+      const envoi = await pousser($)
+      await sauver($)
+
+      return { result: `Page reliée, aucune demande suivie pour l’instant ; ${envoi}.` }
+    }
 
     const liste = sousTaches(e.sous_taches)
     const resteMinutes = nombre(e.reste_minutes)

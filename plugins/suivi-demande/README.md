@@ -45,7 +45,7 @@ En session cloud, le suivi gagne alors l'étape « Installation » : après la f
 
 - **Outil `mcp__suivi-demande__suivre`** : la session principale y déclare le but, les sous-tâches, la phase et ce qu'elle attend de vous. Une consigne ajoutée au prompt le lui rappelle ; les agents n'ont ni l'outil ni la consigne.
 - **Relevé sans la session** : agents et leur état, temps de travail, tours de travail, ouverture et fusion d'une PR.
-- **Commande `/suivi`** : ouvre le panneau ; `/suivi clore` clôt le suivi.
+- **Commande `/suivi`** : ouvre le panneau ; là où aucun panneau ne se dessine, donne l'adresse de la page ou la fait publier. `/suivi clore` clôt le suivi.
 - **Reprise** : l'état est gardé par session (`$.store`) et survit à un redémarrage. Redéclarer la même demande ne remet pas le temps à zéro.
 
 ## Limites
