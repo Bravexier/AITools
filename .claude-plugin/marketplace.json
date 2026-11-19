@@ -3,9 +3,9 @@
   "owner": { "name": "Bravexier" },
   "plugins": [
     {
-      "name": "sonde-chargement",
-      "source": "./plugins/sonde-chargement",
-      "description": "Sonde provisoire : prouve qu'un plugin installé charge son module de hooks, et dit si un panneau s'affiche."
+      "name": "suivi-demande",
+      "source": "./plugins/suivi-demande",
+      "description": "Suivi de la demande en cours : but, étapes, sous-tâches, temps de travail, reste estimé et agents, dans un panneau en local et une page publiée en cloud."
     }
   ]
 }

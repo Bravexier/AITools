@@ -8,9 +8,13 @@ Ce dépôt est un marketplace : `.claude-plugin/marketplace.json` liste les plug
 
 | Plugin | Rôle |
 | --- | --- |
-| `sonde-chargement` | Sonde provisoire. Prouve qu'un plugin installé charge son module de hooks et dit si un panneau s'affiche. À retirer une fois l'essai fait. |
+| [`suivi-demande`](plugins/suivi-demande/README.md) | Suit chaque demande : but, étapes, sous-tâches, temps, agents. Panneau en local, page publiée en cloud. |
 
 ## Installer un plugin
+
+Une fois par surface, puis le plugin se charge dans chaque projet.
+
+### Sessions locales (une fois par machine)
 
 Dans un terminal :
 
@@ -18,10 +22,40 @@ Dans un terminal :
 claude plugin install <plugin> --marketplace Bravexier/AITools
 ```
 
-À l'invite d'une session en terminal :
+Répondre `y` pour ajouter le marketplace, puis choisir la portée utilisateur. Le plugin se charge ensuite dans chaque session neuve, terminal comme application de bureau.
 
-```
-/plugin install <plugin> --marketplace Bravexier/AITools
+Mettre à jour :
+
+```bash
+claude plugin marketplace update aitools
 ```
 
-Dans l'application de bureau : `+` à côté de la zone de saisie, puis Plugins, « Add marketplace » avec `Bravexier/AITools`, puis « Add plugin ».
+```bash
+claude plugin update <plugin>@aitools
+```
+
+### Sessions cloud (une fois par environnement)
+
+Dans les réglages de l'environnement cloud, le script de démarrage installe le plugin à chaque conteneur neuf :
+
+```bash
+#!/bin/bash
+# Plugins Claude Code du marketplace Bravexier/AITools, pour toutes les sessions.
+if command -v claude >/dev/null 2>&1; then
+  claude plugin install <plugin> --marketplace Bravexier/AITools --scope user || true
+fi
+```
+
+Chaque session neuve prend alors la dernière version publiée sur `main`.
+
+## Ajouter un plugin
+
+Un dossier sous `plugins/<nom>/` (`.claude-plugin/plugin.json`, `hooks/`, tests), une entrée de plus dans `.claude-plugin/marketplace.json`, puis :
+
+```bash
+claude plugin validate plugins/<nom>
+```
+
+```bash
+claude plugin test plugins/<nom>
+```
