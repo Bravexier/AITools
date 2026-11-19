@@ -416,7 +416,15 @@ export const register: Register = on => {
     // Ce que la commande laisse à demander part juste après elle, tant que la session est éveillée.
     $.clock.after(300, () => void annoncer($).catch(() => undefined))
     if (e.args.trim().toLowerCase() === 'clore') {
-      if ((await read($, suivi)).demande === null) return { text: 'Aucune demande suivie : rien à clore.' }
+      if ((await read($, suivi)).demande === null) {
+        // Une page reliée sans demande : clore, c'est la faire supprimer.
+        const reste = (await read($, page)).url
+        if (reste === undefined) return { text: 'Aucune demande suivie : rien à clore.' }
+        await update($, page, () => ({ aSupprimer: reste }))
+        await sauver($)
+
+        return { text: 'Aucune demande suivie. La session supprime la page de suivi : confirmez dans l’application.' }
+      }
       // La sortie d'une commande ne lance pas de tour : la suppression de la page est demandée au battement suivant.
       const suite = await cloturer($, 'à votre demande')
 

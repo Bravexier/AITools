@@ -266,6 +266,16 @@ test('sans panneau, /suivi mène à la page : il la fait publier, puis donne son
   expect(soumis).toHaveLength(2)
   expect(soumis[1]).toMatch(/Supprime la page de suivi/)
   expect(soumis[1]).toContain(PAGE)
+
+  // Une page reliée sans demande : /suivi clore la fait supprimer aussi.
+  const sansRien = await $.command.run({ ...COMMANDE, args: 'clore' })
+  expect(sansRien.text).toMatch(/rien à clore/)
+  await $.tool.call({ tool: OUTIL, page: PAGE })
+  const pageSeule = await $.command.run({ ...COMMANDE, args: 'clore' })
+  expect(pageSeule.text).toMatch(/supprime la page/)
+  await temps.advance(5000)
+  expect(soumis).toHaveLength(3)
+  expect(soumis[2]).toContain(PAGE)
 })
 
 test('reprendre la même demande ne remet ni le début ni le temps à zéro', async ($, on) => {
