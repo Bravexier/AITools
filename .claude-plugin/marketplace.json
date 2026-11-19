@@ -1,0 +1,11 @@
+{
+  "name": "aitools",
+  "owner": { "name": "Bravexier" },
+  "plugins": [
+    {
+      "name": "sonde-chargement",
+      "source": "./plugins/sonde-chargement",
+      "description": "Sonde provisoire : prouve qu'un plugin installé charge son module de hooks, et dit si un panneau s'affiche."
+    }
+  ]
+}
