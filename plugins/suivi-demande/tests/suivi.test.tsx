@@ -30,6 +30,8 @@ type Monde = {
   panneau: boolean
   /** Le contenu de `.claude/suivi-demande.json`, s'il existe. */
   reglages?: string
+  /** Le seul dossier qui porte ces réglages ; partout quand il n'est pas donné. */
+  depot?: string
   /** La version que sert le site d'installation. */
   servie?: () => string
 }
@@ -46,7 +48,11 @@ const monde = (on: On, un: Monde) => {
   on('session.root', () => ({ value: '/depot' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: un.estCloud ? 'true' : undefined }))
-  on('fs.read', () => (un.reglages === undefined ? { deny: 'ENOENT' } : { value: un.reglages }))
+  on('fs.read', (_, e) =>
+    un.reglages === undefined || (un.depot !== undefined && !e.path.startsWith(`${un.depot}/`))
+      ? { deny: 'ENOENT' }
+      : { value: un.reglages },
+  )
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: `<span>V${un.servie?.() ?? '0.0.0'}</span>` },
   }))
@@ -232,6 +238,66 @@ test('en cloud, sans panneau : la page est demandée, tenue à jour, et la fusio
   // La page est détachée : la demande suivante en redemande une.
   const suivante = await $.tool.call({ ...DEMANDE, but: 'Autre demande' })
   expect(dit(suivante)).toMatch(/aucune page reliée/)
+})
+
+test('les réglages suivent le dépôt de la demande, pas le dossier de la session', async ($, on) => {
+  let servie = '0.5.44'
+  const { ecritures, soumis } = monde(on, {
+    estCloud: true,
+    panneau: false,
+    reglages: REGLAGES,
+    depot: '/home/user/maverickcenter',
+    servie: () => servie,
+  })
+  await demarrer($)
+
+  // La session est partie d'un autre dossier : pas d'installation tant que le dépôt n'est pas nommé.
+  await $.tool.call({ ...DEMANDE, page: PAGE })
+  const sans = ecritures.at(-1)?.data as { installation?: string }
+  expect(sans.installation).toBeUndefined()
+
+  await $.tool.call({ tool: OUTIL, depot: '/home/user/maverickcenter' })
+  const avec = ecritures.at(-1)?.data as { installation?: string; etapes: [string, string][] }
+  expect(avec.installation).toBe('Site de dev')
+  expect(avec.etapes.at(-1)?.[0]).toBe('installation')
+
+  // Une fusion faite par le propriétaire se déclare : le suivi attend alors la version, il ne se clôt pas.
+  const fusionnee = await $.tool.call({ tool: OUTIL, phase: 'installation', version_cible: '0.5.45' })
+  expect(dit(fusionnee)).toMatch(/phase installation/)
+  await tour($, 't1')
+  expect(soumis).toEqual([])
+  servie = '0.5.45'
+  await tour($, 't2')
+  expect(soumis).toHaveLength(1)
+})
+
+test('une PR ouverte dans un dépôt voisin fait lire ses réglages', async ($, on) => {
+  const { ecritures } = monde(on, {
+    estCloud: true,
+    panneau: false,
+    reglages: REGLAGES,
+    depot: '/home/user/maverickcenter',
+  })
+  on('tool.call', { tool: 'mcp__github__create_pull_request' }, () => {
+    const dit = 'https://github.com/o/MaverickCenter/pull/9'
+
+    return { result: dit, text: dit }
+  })
+  await demarrer($)
+  await $.tool.call({ ...DEMANDE, page: PAGE })
+
+  await $.tool.call({
+    tool: 'mcp__github__create_pull_request',
+    owner: 'o',
+    repo: 'MaverickCenter',
+    title: 't',
+    head: 'feature/x',
+    base: 'dev',
+  })
+  await tour($, 't1')
+  const apres = ecritures.at(-1)?.data as { installation?: string; demande: { pr: number; phase: string } }
+  expect(apres.demande.pr).toBe(9)
+  expect(apres.installation).toBe('Site de dev')
 })
 
 const COMMANDE = { command: 'suivi', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as const

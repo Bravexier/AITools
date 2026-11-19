@@ -51,9 +51,14 @@ const consigne = (un: Cadre, racine: string) =>
           '- Ta propre fusion de la PR clôt le suivi sans toi. Si la PR est fusionnée autrement (événement GitHub, fusion par le propriétaire) : `phase: "terminee"`.',
         ]
       : []),
+    ...(un.estCloud
+      ? [
+          `- Si la demande modifie un autre dépôt que le dossier de la session : \`depot\`, son chemin absolu, dès le premier appel. Ses réglages (${REGLAGES}) y sont lus : ils peuvent ajouter une étape d'installation.`,
+        ]
+      : []),
     ...(un.installation !== undefined
       ? [
-          `- Après la fusion : \`version_cible\`, la version attendue sur ${un.installation.nom}.${un.installation.consigne !== undefined ? ` ${un.installation.consigne}` : ''} Le suivi se clôt quand cette version est servie. Entre deux tours rien ne tourne : programme un rappel (\`send_later\`) pour revenir le constater.`,
+          `- Après la fusion (la tienne est constatée sans toi ; une fusion faite autrement se déclare par \`phase: "installation"\`) : \`version_cible\`, la version attendue sur ${un.installation.nom}.${un.installation.consigne !== undefined ? ` ${un.installation.consigne}` : ''} Le suivi se clôt quand cette version est servie. Entre deux tours rien ne tourne : programme un rappel (\`send_later\`) pour revenir le constater.`,
         ]
       : []),
     ...(un.estCloud
@@ -88,18 +93,24 @@ const schema = (un: Cadre) => ({
     reste_minutes: { type: 'number', description: 'Reste à faire estimé, en minutes.' },
     phase: {
       type: 'string',
-      enum: [...etapesDe(un).map(([cle]) => cle), 'terminee'],
-      description: '`terminee` clôt le suivi.',
+      // En cloud, l'étape d'installation est toujours proposée : les réglages d'un dépôt peuvent arriver après l'enregistrement de l'outil.
+      enum: [...new Set([...etapesDe(un).map(([cle]) => cle), ...(un.estCloud ? ['installation'] : []), 'terminee'])],
+      description: '`terminee` clôt le suivi. `installation` n’existe que si le dépôt règle un site d’installation.',
     },
     ...(un.estCloud && {
       branche: { type: 'string' },
       pr: { type: 'number', description: 'Numéro de la PR.' },
       ci: { type: 'string', enum: ['en_cours', 'verte', 'rouge'] },
     }),
-    ...(un.installation !== undefined && {
+    ...(un.estCloud && {
+      depot: {
+        type: 'string',
+        description: 'Chemin absolu du dépôt que la demande modifie, quand ce n’est pas le dossier de la session.',
+      },
       version_cible: {
         type: 'string',
-        description: `Version attendue sur ${un.installation.nom} pour cette demande, par exemple 1.4.2.`,
+        description:
+          'Version attendue sur le site d’installation pour cette demande, par exemple 1.4.2. Sans effet si le dépôt ne règle pas de site.',
       },
     }),
     attente: { type: 'string', description: 'Ce qui est attendu du propriétaire ; vide pour lever l’attente.' },
@@ -175,11 +186,16 @@ export const installationDe = (contenu: string): Installation | undefined => {
 }
 
 /** Où tourne la session et ce que le dépôt règle. Sans GitHub (session locale), pas d'installation non plus. */
-const etablirLeCadre = async ($: EngineInterface) => {
+const etablirLeCadre = async ($: EngineInterface, depots: readonly (string | undefined)[] = []) => {
   const estCloud = (await $.env.get('CLAUDE_CODE_REMOTE').catch(() => undefined)) === 'true'
   let installation: Installation | undefined
   if (estCloud) {
-    const dossiers = [await $.session.cwd().catch(() => undefined), await $.session.root().catch(() => undefined)]
+    // Le dépôt de la demande d'abord, puis le dossier de la session.
+    const dossiers = [
+      ...depots,
+      await $.session.cwd().catch(() => undefined),
+      await $.session.root().catch(() => undefined),
+    ]
     for (const dossier of dossiers) {
       if (dossier === undefined || installation !== undefined) continue
       installation = await $.fs
@@ -380,7 +396,8 @@ const guetterLInstallation = async ($: EngineInterface) => {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    const un = await etablirLeCadre($)
+    await restaurer($)
+    const un = await etablirLeCadre($, [(await read($, suivi)).demande?.depot])
     await $.tool.register({
       name: 'suivre',
       description:
@@ -393,7 +410,6 @@ export const register: Register = on => {
       description: 'Ouvrir le suivi de la demande ; `/suivi clore` le clôt',
       argumentHint: '[clore]',
     })
-    await restaurer($)
     // Le panneau ne s'ouvre de lui-même que s'il a une demande à montrer.
     if ((await read($, suivi)).demande !== null) void $.ui.open({ id: PANNEAU, title: TITRE })
 
@@ -504,6 +520,16 @@ export const register: Register = on => {
     const numero = /\/pull\/(\d+)/.exec(cree.text ?? '')?.[1]
     if (cree.deny === undefined && cree.isError !== true && numero !== undefined && (await read($, cadre)).estCloud) {
       await modifier($, demande => ({ ...demande, pr: Number(numero), phase: 'ci', ci: 'en_cours' }))
+      // Une PR ouverte dans un dépôt cloné à côté du dossier de la session : ses réglages sont cherchés là.
+      const depot = texte((e as { repo?: unknown }).repo)
+      const { demande } = await read($, suivi)
+      if (depot !== undefined && demande !== null && demande.depot === undefined) {
+        const parents = [await $.session.root().catch(() => undefined), '/home/user']
+        const voisins = parents.flatMap(parent =>
+          parent === undefined ? [] : [`${parent}/${depot}`, `${parent}/${depot.toLowerCase()}`],
+        )
+        await etablirLeCadre($, voisins)
+      }
     }
 
     return cree
@@ -524,8 +550,12 @@ export const register: Register = on => {
 
   on('tool.run', { tool: OUTIL }, async ($, e) => {
     const maintenant = await $.clock.now()
-    const un = await read($, cadre)
     const avant = (await read($, suivi)).demande
+    const estCloud = (await read($, cadre)).estCloud
+    const depot = estCloud ? (texte(e.depot) ?? (e.nouvelle === true ? undefined : avant?.depot)) : undefined
+    // Les réglages suivent le dépôt de la demande : relus quand il est donné, et à chaque nouvelle demande.
+    const un =
+      texte(e.depot) !== undefined || e.nouvelle === true ? await etablirLeCadre($, [depot]) : await read($, cadre)
     const butDonne = texte(e.but)
     // `nouvelle` avec le même but rétablit le suivi : ni le début ni le temps mesuré ne repartent de zéro.
     const base = e.nouvelle === true && butDonne !== undefined && butDonne !== avant?.but ? null : avant
@@ -567,6 +597,7 @@ export const register: Register = on => {
       but,
       ...(liste !== undefined && { sousTaches: liste }),
       ...(resteMinutes !== undefined && { resteMinutes }),
+      ...(depot !== undefined && { depot }),
       ...(phase !== undefined && { phase }),
       ...(branche !== undefined && { branche }),
       ...(pr !== undefined && { pr }),

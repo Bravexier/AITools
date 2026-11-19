@@ -39,7 +39,7 @@ Un dépôt dont les demandes fusionnées s'installent sur un site ajoute `.claud
 - `motif` : expression régulière dont le premier groupe capture cette version.
 - `nom` et `consigne` : facultatifs ; la consigne dit à la session comment trouver la version cible.
 
-En session cloud, le suivi gagne alors l'étape « Installation » : après la fusion, la session donne `version_cible`, et le suivi ne se clôt que lorsque le site sert cette version ou une plus récente. Sans ce fichier, rien de tout cela n'existe.
+Le fichier est lu dans le dépôt que la demande modifie : le dossier de la session, le dépôt que la session nomme dans `depot`, ou celui où elle ouvre sa PR. En session cloud, le suivi gagne alors l'étape « Installation » : après la fusion, la session donne `version_cible`, et le suivi ne se clôt que lorsque le site sert cette version ou une plus récente. Sans ce fichier, rien de tout cela n'existe.
 
 ## Ce que fait le mod
 
@@ -52,7 +52,7 @@ En session cloud, le suivi gagne alors l'étape « Installation » : après la f
 
 - Entre deux tours, une session cloud dort : la page n'est écrite qu'au début et à la fin de chaque tour, et pendant. Ses durées continuent de défiler, mais rien d'autre n'y bouge tant que la session n'est pas réveillée.
 - L'état de la CI est déclaré par la session à chaque événement de la PR, pas lu sur GitHub.
-- Une PR fusionnée hors de la session (par vous sur GitHub) n'est constatée que lorsque la session l'apprend et le déclare.
+- Une PR fusionnée hors de la session (par vous sur GitHub) n'est constatée que lorsque la session l'apprend et le déclare : `terminee` sans site d'installation, `installation` avec.
 - La session cloud est reconnue par la variable `CLAUDE_CODE_REMOTE`.
 
 ## Contrôler

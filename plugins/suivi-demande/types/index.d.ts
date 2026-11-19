@@ -35,6 +35,8 @@ export type Demande = {
   sousTaches: SousTache[]
   /** Reste à faire estimé par la session principale, en minutes. */
   resteMinutes?: number
+  /** Le dossier du dépôt que la demande modifie, quand ce n'est pas celui de la session : ses réglages y sont lus. */
+  depot?: string
   phase: Phase
   branche?: string
   pr?: number
