@@ -48,8 +48,10 @@ const monde = (on: On, un: Monde) => {
   on('session.root', () => ({ value: '/depot' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: un.estCloud ? 'true' : undefined }))
+  // Sous Windows, le moteur rend `/home/user/x` en `C:\home\user\x` : on compare la forme POSIX.
   on('fs.read', (_, e) =>
-    un.reglages === undefined || (un.depot !== undefined && !e.path.startsWith(`${un.depot}/`))
+    un.reglages === undefined ||
+    (un.depot !== undefined && !e.path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '').startsWith(`${un.depot}/`))
       ? { deny: 'ENOENT' }
       : { value: un.reglages },
   )
@@ -147,6 +149,19 @@ test('les durées, les versions, les étapes et les réglages se calculent', () 
   expect(installationDe('pas du json')).toBeUndefined()
   expect(installationDe(JSON.stringify({ installation: { url: 'https://x.test/', motif: '(' } }))).toBeUndefined()
   expect(installationDe(JSON.stringify({ installation: { url: 'http://x.test/', motif: 'V(.)' } }))).toBeUndefined()
+})
+
+test('un agent ne tient pas le suivi : son appel est refusé, celui de la session passe', async ($, on) => {
+  // Bug du 2026-11-20 : le hook `tool.offer` n'existe pas sur le moteur 2.1.326,
+  // le module ne se chargeait pas du tout.
+  monde(on, { estCloud: false, panneau: true })
+  await demarrer($)
+
+  const agent = await $.tool.call({ ...DEMANDE, agentId: 'agent-1' })
+  expect(agent.deny).toMatch(/session principale/)
+
+  const session = await $.tool.call(DEMANDE)
+  expect(session.deny ?? session.isError).toBeUndefined()
 })
 
 test('en local, le panneau suffit : ni page, ni GitHub, clôture à la demande', async ($, on) => {

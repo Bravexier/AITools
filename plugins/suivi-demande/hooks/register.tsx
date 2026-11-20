@@ -467,9 +467,11 @@ export const register: Register = on => {
     return { ...compose, sections: [...compose.sections, { id: MOD, text, scope: 'session' }] }
   })
 
-  // Seule la session principale tient le suivi : les agents n'ont pas l'outil.
-  on('tool.offer', ($, e, next) =>
-    e.tool === OUTIL && e.agentId !== undefined ? { isOffered: false } : next(e),
+  // Seule la session principale tient le suivi : l'appel d'un agent est refusé.
+  // (Le moteur 2.1.326 n'a pas d'événement pour cacher un outil à un seul agent :
+  // `tool.list` règle l'outillage de toute la session.)
+  on('tool.call', { tool: OUTIL }, ($, e, next) =>
+    e.agentId !== undefined ? { deny: 'Seule la session principale tient le suivi de la demande.' } : next(e),
   )
 
   on('turn.start', async ($, e, next) => {
