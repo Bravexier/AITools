@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, Cadre, Demande, Etat, Installation, Page, Phase, SousTache } from '../types'
+import type { Agent, Cadre, Compteur, Demande, Etat, Installation, Page, Phase, SousTache } from '../types'
 
 const MOD = 'suivi-demande'
 const PANNEAU = 'suivi-demande'
@@ -86,6 +86,19 @@ const schema = (un: Cadre) => ({
           etat: { type: 'string', enum: ETATS },
           minutes: { type: 'number', description: 'Durée estimée, en minutes.' },
           agent: { type: 'string', description: "L'agent qui la porte, s'il y en a un." },
+          compteur: {
+            type: 'object',
+            description:
+              "Avancement qu'un programme écrit dans un fichier JSON local (époque d'un entraînement, lot d'un traitement) : le mod le relit seul une fois par minute et l'affiche sur la sous-tâche, même session inactive. Redonne-le à chaque appel qui redonne la sous-tâche.",
+            properties: {
+              fichier: { type: 'string', description: 'Chemin absolu du fichier JSON.' },
+              cle: { type: 'string', description: 'Clé de la valeur, au premier niveau du JSON (un nombre).' },
+              total_cle: { type: 'string', description: 'Clé du total, au premier niveau du JSON.' },
+              libelle: { type: 'string', description: 'Libellé affiché devant la valeur, par exemple « Époque ».' },
+              decalage: { type: 'number', description: 'Ajouté à la valeur lue : 1 quand le fichier compte à partir de 0.' },
+            },
+            required: ['fichier', 'cle'],
+          },
         },
         required: ['titre', 'etat'],
       },
@@ -124,6 +137,26 @@ const texte = (valeur: unknown) =>
 const nombre = (valeur: unknown) =>
   typeof valeur === 'number' && Number.isFinite(valeur) && valeur >= 0 ? valeur : undefined
 
+const compteurDe = (valeur: unknown): Compteur | undefined => {
+  if (typeof valeur !== 'object' || valeur === null) return undefined
+  const brut = valeur as Record<string, unknown>
+  const fichier = texte(brut.fichier)
+  const cle = texte(brut.cle)
+  if (fichier === undefined || cle === undefined) return undefined
+  const totalCle = texte(brut.total_cle)
+  const libelle = texte(brut.libelle)
+  const decalage =
+    typeof brut.decalage === 'number' && Number.isFinite(brut.decalage) && brut.decalage !== 0 ? brut.decalage : undefined
+
+  return {
+    fichier,
+    cle,
+    ...(totalCle !== undefined && { totalCle }),
+    ...(libelle !== undefined && { libelle }),
+    ...(decalage !== undefined && { decalage }),
+  }
+}
+
 const sousTaches = (valeur: unknown): SousTache[] | undefined => {
   if (!Array.isArray(valeur)) return undefined
 
@@ -135,10 +168,59 @@ const sousTaches = (valeur: unknown): SousTache[] | undefined => {
     const etat = ETATS.find(connu => connu === une.etat) ?? 'programmee'
     const minutes = nombre(une.minutes)
     const agent = texte(une.agent)
+    const compteur = compteurDe(une.compteur)
 
-    return [{ titre, etat, ...(minutes !== undefined && { minutes }), ...(agent !== undefined && { agent }) }]
+    return [
+      {
+        titre,
+        etat,
+        ...(minutes !== undefined && { minutes }),
+        ...(agent !== undefined && { agent }),
+        ...(compteur !== undefined && { compteur }),
+      },
+    ]
   })
 }
+
+/** Lit un compteur dans le contenu de son fichier ; rien si le JSON est invalide ou n'a pas la valeur. */
+export const lireCompteur = (contenu: string, compteur: Compteur): { valeur: number; total?: number } | undefined => {
+  let donnees: unknown
+  try {
+    donnees = JSON.parse(contenu)
+  } catch {
+    return undefined
+  }
+  if (typeof donnees !== 'object' || donnees === null) return undefined
+  const champs = donnees as Record<string, unknown>
+  const brute = champs[compteur.cle]
+  if (typeof brute !== 'number' || !Number.isFinite(brute)) return undefined
+  const total = compteur.totalCle === undefined ? undefined : nombre(champs[compteur.totalCle])
+  const valeur = brute + (compteur.decalage ?? 0)
+
+  // Un fichier qui compte à partir de 0 donne, à la fin, le total lui-même : le décalage ne le dépasse pas.
+  return total === undefined ? { valeur } : { valeur: Math.min(valeur, total), total }
+}
+
+export const texteCompteur = (compteur: Compteur) => {
+  const nom = compteur.libelle ?? compteur.cle
+  if (compteur.valeur === undefined) return `${nom} : fichier pas encore lu`
+
+  return `${nom} ${compteur.valeur}${compteur.total !== undefined ? `/${compteur.total}` : ''}`
+}
+
+const memeLecture = (a: Compteur, b: Compteur) =>
+  a.fichier === b.fichier && a.cle === b.cle && a.totalCle === b.totalCle && a.decalage === b.decalage
+
+/** Une sous-tâche redonnée garde la dernière lecture de son compteur, s'il lit toujours la même chose. */
+const garderLesLectures = (liste: SousTache[] | undefined, avant: readonly SousTache[] = []) =>
+  liste?.map(une => {
+    const compteur = une.compteur
+    if (compteur === undefined) return une
+    const lu = avant.find(autre => autre.compteur !== undefined && memeLecture(autre.compteur, compteur))?.compteur
+    if (lu?.valeur === undefined) return une
+
+    return { ...une, compteur: { ...compteur, valeur: lu.valeur, ...(lu.total !== undefined && { total: lu.total }) } }
+  })
 
 export const duree = (minutes: number) => {
   const arrondi = Math.max(0, Math.round(minutes))
@@ -235,6 +317,45 @@ const releverLesAgents = async ($: EngineInterface) => {
   }))
   const avant = await read($, agents)
   if (JSON.stringify(avant) !== JSON.stringify(releve)) await update($, agents, () => releve)
+}
+
+/** Un fichier de compteur n'est pas relu avant ce délai. */
+const RELECTURE_MS = 60_000
+const derniereLecture = new Map<string, number>()
+
+/**
+ * Relit les fichiers des compteurs, chacun au plus une fois par minute. Un
+ * fichier absent ou illisible ne change rien : la dernière valeur reste.
+ */
+const releverLesCompteurs = async ($: EngineInterface) => {
+  const { demande } = await read($, suivi)
+  if (demande === null) return
+  const maintenant = await $.clock.now()
+  const fichiers = [...new Set(demande.sousTaches.flatMap(une => (une.compteur === undefined ? [] : [une.compteur.fichier])))]
+  const contenus = new Map<string, string>()
+  for (const fichier of fichiers) {
+    if (maintenant - (derniereLecture.get(fichier) ?? -Infinity) < RELECTURE_MS) continue
+    derniereLecture.set(fichier, maintenant)
+    const contenu = await $.fs.read(fichier).catch(() => undefined)
+    if (typeof contenu === 'string') contenus.set(fichier, contenu)
+  }
+  if (contenus.size === 0) return
+
+  const relire = (une: SousTache): SousTache => {
+    const { compteur } = une
+    const contenu = compteur === undefined ? undefined : contenus.get(compteur.fichier)
+    if (compteur === undefined || contenu === undefined) return une
+    const lu = lireCompteur(contenu, compteur)
+    if (lu === undefined || (lu.valeur === compteur.valeur && lu.total === compteur.total)) return une
+    const { valeur: _avant, total: _ancien, ...reglage } = compteur
+
+    return { ...une, compteur: { ...reglage, ...lu } }
+  }
+  // Rien n'est écrit si aucune valeur n'a bougé : ni le panneau ni la page ne sont redessinés pour rien.
+  const { demande: actuelle } = await read($, suivi)
+  if (actuelle !== null && actuelle.sousTaches.some(une => relire(une) !== une)) {
+    await modifier($, une => ({ ...une, sousTaches: une.sousTaches.map(relire) }))
+  }
 }
 
 const cleDeSession = async ($: EngineInterface) => `suivi:${await $.session.id()}`
@@ -417,6 +538,7 @@ export const register: Register = on => {
     $.clock.every(5000, () => {
       battement += 1
       void (async () => {
+        await releverLesCompteurs($)
         await mettreAJour($)
         if (battement % 6 === 0) await update($, horloge, () => battement)
         if (battement % 12 === 0) await guetterLInstallation($)
@@ -573,7 +695,7 @@ export const register: Register = on => {
       return { result: `Page reliée, aucune demande suivie pour l’instant ; ${envoi}.` }
     }
 
-    const liste = sousTaches(e.sous_taches)
+    const liste = garderLesLectures(sousTaches(e.sous_taches), avant?.sousTaches)
     const resteMinutes = nombre(e.reste_minutes)
     const phase =
       e.phase === 'terminee' ? ('terminee' as const) : etapesDe(un).find(([cle]) => cle === e.phase)?.[0]
@@ -615,6 +737,8 @@ export const register: Register = on => {
       return { result: suite ?? 'Suivi clos.' }
     }
     await update($, suivi, () => ({ demande }))
+    // Un compteur nouveau est lu tout de suite ; les autres gardent leur rythme d'une lecture par minute.
+    await releverLesCompteurs($).catch(() => undefined)
     if (un.installation !== undefined && demande.phase === 'installation' && avant?.phase !== 'installation') {
       await entrerEnInstallation($, un.installation)
     }
@@ -744,6 +868,7 @@ export const register: Register = on => {
                 {marque[une.etat]} {une.titre}
                 {une.minutes !== undefined ? ` (${duree(une.minutes)})` : ''}
                 {une.agent !== undefined ? ` — ${une.agent}` : ''}
+                {une.compteur !== undefined ? ` — ${texteCompteur(une.compteur)}` : ''}
                 {une.etat === 'programmee' ? ' — programmée' : ''}
                 {une.etat === 'en_attente' ? ' — en attente' : ''}
               </Text>

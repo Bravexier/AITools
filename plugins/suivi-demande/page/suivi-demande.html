@@ -105,6 +105,8 @@ li.finie { opacity: .62; }
 .vide { background: var(--surface); border: 1px dashed var(--trait); border-radius: 10px; padding: 22px 16px; color: var(--discret); }
 .vide strong { display: block; color: var(--texte); font-weight: 600; margin-bottom: 4px; }
 .mono { font-family: var(--mono); font-size: 13px; }
+.liste .compteur { color: var(--texte); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.liste .corps .jauge { max-width: 320px; }
 </style>
 
 <main class="page">
@@ -168,6 +170,18 @@ li.finie { opacity: .62; }
       const s = Math.max(0, Math.round((maintenant - etat.majLe) / 1000))
       fraicheur.textContent = s < 60 ? `Mis à jour il y a ${s} s` : `Mis à jour il y a ${duree(s / 60)}`
     }
+  }
+
+  // Le compteur qu'un programme écrit dans un fichier local, relu par le mod une fois par minute.
+  const texteCompteur = c => {
+    const nom = c.libelle || c.cle
+    if (nombre(c.valeur) === undefined) return `${nom} : fichier pas encore lu`
+    return `${nom} ${c.valeur}${nombre(c.total) !== undefined ? `/${c.total}` : ''}`
+  }
+  const jauge = (fait, total) => {
+    const j = el('div', { class: 'jauge' }, el('i', {}))
+    j.firstChild.style.width = `${total ? Math.min(100, (100 * fait) / total) : 0}%`
+    return j
   }
 
   const reste = demande => {
@@ -270,18 +284,20 @@ li.finie { opacity: .62; }
           el('dd', {}, vivant('depuis', 0, nombre(demande.debut)),
             el('small', {}, `${demande.tours || 1} tour${(demande.tours || 1) > 1 ? 's' : ''} de travail`))),
         el('div', { class: 'chiffre' }, el('dt', {}, 'Sous-tâches faites'),
-          el('dd', {}, `${faites}/${taches.length}`,
-            (() => { const j = el('div', { class: 'jauge' }, el('i', {})); j.firstChild.style.width = `${taches.length ? (100 * faites) / taches.length : 0}%`; return j })())))),
+          el('dd', {}, `${faites}/${taches.length}`, jauge(faites, taches.length))))),
 
       taches.length > 0 ? section('Sous-tâches', el('ul', { class: 'liste' }, taches.map(u => {
         const vue = {
           faite: ['bon', '✓', 'bon', 'faite'], en_cours: ['marche', '', 'marche', 'en cours'],
           programmee: ['libre', '', '', 'programmée'], en_attente: ['pause', 'Ⅱ', 'pause', 'en attente'],
         }[u.etat] || ['libre', '', '', '']
+        const c = u.compteur && typeof u.compteur === 'object' ? u.compteur : null
         return el('li', { class: u.etat === 'faite' ? 'faite' : '' },
           voyant(vue[0], vue[1]),
           el('span', { class: 'corps' }, el('span', { class: 'titre' }, u.titre),
-            el('span', { class: 'detail' }, el('span', { class: `etat ${vue[2]}` }, vue[3]), u.agent ? ` · ${u.agent}` : '')),
+            el('span', { class: 'detail' }, el('span', { class: `etat ${vue[2]}` }, vue[3]), u.agent ? ` · ${u.agent}` : ''),
+            c ? el('span', { class: 'detail mono compteur' }, texteCompteur(c)) : null,
+            c && nombre(c.valeur) !== undefined && nombre(c.total) ? jauge(c.valeur, c.total) : null),
           nombre(u.minutes) !== undefined ? el('span', { class: 'cote' }, duree(u.minutes)) : null)
       }))) : null,
 
