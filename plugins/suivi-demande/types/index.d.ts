@@ -1,5 +1,27 @@
 export type Etat = 'faite' | 'en_cours' | 'programmee' | 'en_attente'
 
+/**
+ * Un compteur que le mod relit seul dans un fichier JSON local, au plus une
+ * fois par minute : l'avancement d'une sous-tâche qui tourne sans la session
+ * (époque d'un entraînement, lot d'un traitement).
+ */
+export type Compteur = {
+  /** Chemin absolu du fichier JSON. */
+  fichier: string
+  /** Clé de la valeur, au premier niveau du JSON. */
+  cle: string
+  /** Clé du total, au premier niveau du JSON. */
+  totalCle?: string
+  /** Libellé affiché devant la valeur ; la clé à défaut. */
+  libelle?: string
+  /** Ajouté à la valeur lue : 1 quand le fichier compte à partir de 0. */
+  decalage?: number
+  /** Dernière valeur lue, décalage compris, jamais au-delà du total. Gardée quand le fichier manque ou est illisible. */
+  valeur?: number
+  /** Dernier total lu. */
+  total?: number
+}
+
 export type SousTache = {
   titre: string
   etat: Etat
@@ -7,6 +29,7 @@ export type SousTache = {
   minutes?: number
   /** L'agent qui la porte, s'il y en a un. */
   agent?: string
+  compteur?: Compteur
 }
 
 /**

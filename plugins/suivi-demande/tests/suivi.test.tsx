@@ -2,7 +2,16 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { duree, estInstallee, estPlusRecente, etapesDe, installationDe, reste } from '../hooks/register'
+import {
+  duree,
+  estInstallee,
+  estPlusRecente,
+  etapesDe,
+  installationDe,
+  lireCompteur,
+  reste,
+  texteCompteur,
+} from '../hooks/register'
 
 const OUTIL = 'mcp__suivi-demande__suivre'
 const PAGE = 'https://claude.ai/code/artifact/00000000-0000-4000-8000-000000000000'
@@ -34,13 +43,19 @@ type Monde = {
   depot?: string
   /** La version que sert le site d'installation. */
   servie?: () => string
+  /** Les fichiers locaux lisibles, par chemin POSIX ; la valeur `undefined` : fichier absent. */
+  fichiers?: Record<string, string | undefined>
 }
+
+/** Sous Windows, le moteur rend `/home/user/x` en `C:\home\user\x` : on compare la forme POSIX. */
+const posix = (chemin: string) => chemin.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
 
 /** Tient lieu de moteur sous le plugin, et note ce que le plugin lui demande. */
 const monde = (on: On, un: Monde) => {
   const ecritures: Record<string, unknown>[] = []
   const soumis: string[] = []
   const fermes: string[] = []
+  const lus: string[] = []
   const temps = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('session.id', () => ({ value: 'session-de-test' }))
@@ -48,13 +63,19 @@ const monde = (on: On, un: Monde) => {
   on('session.root', () => ({ value: '/depot' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: un.estCloud ? 'true' : undefined }))
-  // Sous Windows, le moteur rend `/home/user/x` en `C:\home\user\x` : on compare la forme POSIX.
-  on('fs.read', (_, e) =>
-    un.reglages === undefined ||
-    (un.depot !== undefined && !e.path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '').startsWith(`${un.depot}/`))
+  on('fs.read', (_, e) => {
+    const chemin = posix(e.path)
+    if (un.fichiers !== undefined && chemin in un.fichiers) {
+      lus.push(chemin)
+      const contenu = un.fichiers[chemin]
+
+      return contenu === undefined ? { deny: 'ENOENT' } : { value: contenu }
+    }
+
+    return un.reglages === undefined || (un.depot !== undefined && !chemin.startsWith(`${un.depot}/`))
       ? { deny: 'ENOENT' }
-      : { value: un.reglages },
-  )
+      : { value: un.reglages }
+  })
   on('http.fetch', () => ({
     value: { ok: true, status: 200, headers: {}, text: `<span>V${un.servie?.() ?? '0.0.0'}</span>` },
   }))
@@ -84,7 +105,7 @@ const monde = (on: On, un: Monde) => {
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
 
-  return { ecritures, soumis, fermes, temps }
+  return { ecritures, soumis, fermes, temps, lus }
 }
 
 const DEMANDE = {
@@ -407,4 +428,112 @@ test('un dépôt qui règle son site : la fusion ouvre l’installation, la vers
   const derniere = ecritures.at(-1)?.data as { demande: unknown; cloture?: { motif: string } }
   expect(derniere.demande).toBeNull()
   expect(derniere.cloture?.motif).toBe('Site de dev sert V0.5.39')
+})
+
+const STATUT = '/atelier/francise/statut.json'
+const ENTRAINEMENT = {
+  tool: OUTIL,
+  nouvelle: true,
+  but: 'Entraîner la voix francisée',
+  sous_taches: [
+    {
+      titre: 'Entraîner le modèle',
+      etat: 'en_cours',
+      compteur: { fichier: STATUT, cle: 'epoque', total_cle: 'max_epoques', libelle: 'Époque', decalage: 1 },
+    },
+  ],
+} as const
+const statut = (epoque: number, fini = false) =>
+  JSON.stringify({ epoque, max_epoques: 40, duree_epoque_s: 1500, fini })
+
+/** Ce que le panneau affiche sur la sous-tâche du compteur. */
+const ligneDuCompteur = async ($: Engine) => {
+  const ui = await $.ui.mount({ ...PANNEAU, surface: 'desktop' })
+  const ligne = await ui.find({ type: 'Text', text: /Entraîner le modèle/ })
+  const vue = ligne === undefined ? '' : JSON.stringify(ligne)
+  await ui.unmount()
+
+  return vue
+}
+
+/** Le compteur de la dernière écriture de la page. */
+const compteurDeLaPage = (ecritures: Record<string, unknown>[]) =>
+  (ecritures.at(-1)?.data as { demande: { sousTaches: { compteur?: { valeur?: number; total?: number } }[] } })
+    .demande.sousTaches[0]?.compteur
+
+test('un compteur se lit dans un fichier JSON, décalage compris, sans dépasser le total', () => {
+  const reglage = { fichier: STATUT, cle: 'epoque', totalCle: 'max_epoques', libelle: 'Époque', decalage: 1 }
+  expect(lireCompteur(statut(6), reglage)).toEqual({ valeur: 7, total: 40 })
+  // À la fin de l'entraînement, le fichier donne le total lui-même : 40/40, pas 41/40.
+  expect(lireCompteur(statut(40, true), reglage)).toEqual({ valeur: 40, total: 40 })
+  expect(lireCompteur(statut(6), { fichier: STATUT, cle: 'epoque' })).toEqual({ valeur: 6 })
+  expect(lireCompteur('{"epoque": "six"}', reglage)).toBeUndefined()
+  expect(lireCompteur('{"autre": 3}', reglage)).toBeUndefined()
+  expect(lireCompteur('{"epoque": 6, "max_ep', reglage)).toBeUndefined()
+  expect(lireCompteur('null', reglage)).toBeUndefined()
+  expect(lireCompteur('', reglage)).toBeUndefined()
+
+  expect(texteCompteur({ ...reglage, valeur: 7, total: 40 })).toBe('Époque 7/40')
+  expect(texteCompteur({ fichier: STATUT, cle: 'lot', valeur: 3 })).toBe('lot 3')
+  expect(texteCompteur(reglage)).toBe('Époque : fichier pas encore lu')
+})
+
+test('le compteur se relit seul une fois par minute, sans tour de la session, panneau et page compris', async ($, on) => {
+  const fichiers: Record<string, string | undefined> = { [STATUT]: statut(6) }
+  const { ecritures, temps, lus } = monde(on, { estCloud: false, panneau: true, fichiers })
+  await demarrer($)
+
+  const cree = await $.tool.call({ ...ENTRAINEMENT, page: PAGE })
+  expect(dit(cree)).toMatch(/panneau affiché ; page à jour/)
+  expect(lus).toHaveLength(1)
+  expect(await ligneDuCompteur($)).toMatch(/Époque 7\/40/)
+  expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 7, total: 40 })
+
+  // L'époque avance pendant que la session est inactive : aucun tour ne commence.
+  fichiers[STATUT] = statut(7)
+  await temps.advance(5000)
+  expect(lus).toHaveLength(1)
+  expect(await ligneDuCompteur($)).toMatch(/Époque 7\/40/)
+
+  await temps.advance(55_000)
+  expect(lus).toHaveLength(2)
+  expect(await ligneDuCompteur($)).toMatch(/Époque 8\/40/)
+  expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 8, total: 40 })
+
+  // Une valeur qui n'a pas bougé ne réécrit pas la page.
+  const avant = ecritures.length
+  await temps.advance(60_000)
+  expect(lus).toHaveLength(3)
+  expect(ecritures).toHaveLength(avant)
+})
+
+test('un fichier absent ou un JSON invalide ne casse rien : la dernière valeur reste', async ($, on) => {
+  const fichiers: Record<string, string | undefined> = { [STATUT]: undefined }
+  const { ecritures, temps, lus } = monde(on, { estCloud: false, panneau: true, fichiers })
+  await demarrer($)
+
+  // Le fichier n'existe pas encore : l'entraînement n'a pas commencé.
+  const cree = await $.tool.call({ ...ENTRAINEMENT, page: PAGE })
+  expect(cree.deny ?? cree.isError).toBeUndefined()
+  expect(await ligneDuCompteur($)).toMatch(/Époque : fichier pas encore lu/)
+
+  fichiers[STATUT] = statut(2)
+  await temps.advance(60_000)
+  expect(await ligneDuCompteur($)).toMatch(/Époque 3\/40/)
+
+  // Écriture coupée en plein milieu, puis fichier retiré : la valeur lue reste.
+  fichiers[STATUT] = '{"epoque": 3, "max_ep'
+  await temps.advance(60_000)
+  expect(await ligneDuCompteur($)).toMatch(/Époque 3\/40/)
+  fichiers[STATUT] = undefined
+  await temps.advance(60_000)
+  expect(lus).toHaveLength(4)
+  expect(await ligneDuCompteur($)).toMatch(/Époque 3\/40/)
+  expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 3, total: 40 })
+
+  // La session redonne ses sous-tâches avant la lecture suivante : le compteur garde sa valeur.
+  await $.tool.call({ tool: OUTIL, sous_taches: ENTRAINEMENT.sous_taches, reste_minutes: 600 })
+  expect(lus).toHaveLength(4)
+  expect(await ligneDuCompteur($)).toMatch(/Époque 3\/40/)
+  expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 3, total: 40 })
 })

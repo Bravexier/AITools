@@ -41,10 +41,35 @@ Un dépôt dont les demandes fusionnées s'installent sur un site ajoute `.claud
 
 Le fichier est lu dans le dépôt que la demande modifie : le dossier de la session, le dépôt que la session nomme dans `depot`, ou celui où elle ouvre sa PR. En session cloud, le suivi gagne alors l'étape « Installation » : après la fusion, la session donne `version_cible`, et le suivi ne se clôt que lorsque le site sert cette version ou une plus récente. Sans ce fichier, rien de tout cela n'existe.
 
+## Compteur relu sans la session
+
+Une sous-tâche qui tourne sans la session (entraînement, lot de fichiers) peut porter un `compteur` : un programme écrit son avancement dans un fichier JSON local, et le mod le relit seul, au plus une fois par minute, même quand la session est inactive. Le panneau et la page affichent alors « Époque 7/40 » sur la sous-tâche, avec une jauge sur la page.
+
+```json
+{
+  "titre": "Entraîner la voix",
+  "etat": "en_cours",
+  "compteur": {
+    "fichier": "D:\\WoW-TTS\\francise\\statut.json",
+    "cle": "epoque",
+    "total_cle": "max_epoques",
+    "libelle": "Époque",
+    "decalage": 1
+  }
+}
+```
+
+- `fichier` et `cle` : obligatoires ; la valeur est un nombre au premier niveau du JSON.
+- `total_cle` : la clé du total, s'il y en a un. La valeur affichée ne le dépasse jamais.
+- `decalage` : ajouté à la valeur lue, par exemple 1 quand le fichier compte à partir de 0.
+- `libelle` : le nom affiché ; la clé à défaut.
+
+Un fichier absent, en cours d'écriture ou invalide ne change rien : la dernière valeur lue reste affichée. La session redonne le `compteur` à chaque appel qui redonne la sous-tâche ; la valeur lue est gardée.
+
 ## Ce que fait le mod
 
 - **Outil `mcp__suivi-demande__suivre`** : la session principale y déclare le but, les sous-tâches, la phase et ce qu'elle attend de vous. Une consigne ajoutée au prompt le lui rappelle ; les agents n'ont pas la consigne, et leur appel de l'outil est refusé.
-- **Relevé sans la session** : agents et leur état, temps de travail, tours de travail, ouverture et fusion d'une PR.
+- **Relevé sans la session** : agents et leur état, temps de travail, tours de travail, ouverture et fusion d'une PR, compteurs lus dans un fichier local.
 - **Commande `/suivi`** : ouvre le panneau ; là où aucun panneau ne se dessine, donne l'adresse de la page ou la fait publier. `/suivi clore` clôt le suivi.
 - **Reprise** : l'état est gardé par session (`$.store`) et survit à un redémarrage. Redéclarer la même demande ne remet pas le temps à zéro.
 
@@ -54,6 +79,7 @@ Le fichier est lu dans le dépôt que la demande modifie : le dossier de la sess
 - L'état de la CI est déclaré par la session à chaque événement de la PR, pas lu sur GitHub.
 - Une PR fusionnée hors de la session (par vous sur GitHub) n'est constatée que lorsque la session l'apprend et le déclare : `terminee` sans site d'installation, `installation` avec.
 - La session cloud est reconnue par la variable `CLAUDE_CODE_REMOTE`.
+- Un compteur ne lit que les fichiers de la machine où tourne la session ; une page publiée avant la version 1.1.0 ne l'affiche pas : la republier telle quelle à la même adresse.
 
 ## Contrôler
 
