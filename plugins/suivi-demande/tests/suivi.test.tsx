@@ -3,14 +3,11 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import {
-  duree,
   estInstallee,
   estPlusRecente,
   etapesDe,
   installationDe,
   lireCompteur,
-  reste,
-  texteCompteur,
 } from '../hooks/register'
 
 const OUTIL = 'mcp__suivi-demande__suivre'
@@ -18,25 +15,9 @@ const PAGE = 'https://claude.ai/code/artifact/00000000-0000-4000-8000-0000000000
 const REGLAGES = JSON.stringify({
   installation: { nom: 'Site de dev', url: 'https://dev.example.test/', motif: '>V(\\d+\\.\\d+\\.\\d+)<' },
 })
-const PANNEAU = {
-  plugin: 'suivi-demande',
-  component: 'Pane',
-  requestId: 'suivi-demande',
-  props: {
-    title: 'Suivi de la demande',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 40 },
-    view: {},
-  },
-} as const
-
 type Monde = {
   /** Session cloud (`CLAUDE_CODE_REMOTE=true`) ou locale. */
   estCloud: boolean
-  /** Un panneau se dessine-t-il ? */
-  panneau: boolean
   /** Le contenu de `.claude/suivi-demande.json`, s'il existe. */
   reglages?: string
   /** Le seul dossier qui porte ces réglages ; partout quand il n'est pas donné. */
@@ -56,6 +37,8 @@ const monde = (on: On, un: Monde) => {
   const soumis: string[] = []
   const fermes: string[] = []
   const lus: string[] = []
+  /** Les panneaux que le mod a ouverts : aucun, le suivi n'est que la page. */
+  const ouverts: string[] = []
   const temps = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   on('session.id', () => ({ value: 'session-de-test' }))
@@ -82,7 +65,11 @@ const monde = (on: On, un: Monde) => {
   on('agent.list', () => ({ value: [] }))
   on('tool.register', () => ({ value: { tool: OUTIL } }))
   on('command.register', () => ({ value: { command: 'suivi' } }))
-  on('ui.open', () => ({ value: un.panneau ? { isPlaced: true } : { isPlaced: false, reason: 'aucune surface' } }))
+  on('ui.open', (_, e) => {
+    ouverts.push(e.id)
+
+    return { value: { isPlaced: true } }
+  })
   on('ui.close', (_, e) => {
     fermes.push(e.id)
 
@@ -105,7 +92,7 @@ const monde = (on: On, un: Monde) => {
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
 
-  return { ecritures, soumis, fermes, temps, lus }
+  return { ecritures, soumis, fermes, ouverts, temps, lus }
 }
 
 const DEMANDE = {
@@ -119,6 +106,8 @@ const DEMANDE = {
   ],
 } as const
 
+const COMMANDE = { command: 'suivi', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as const
+
 const demarrer = ($: Engine) => $.session.start({ cwd: '/depot', surface: 'desktop', isInteractive: true })
 
 /** Ce que l'outil de suivi a répondu à la session. */
@@ -129,28 +118,12 @@ const tour = async ($: Engine, turnId: string, durationMs = 0) => {
   await $.turn.complete({ answer: '', durationMs, isAborted: false, turnId, reason: 'answer' })
 }
 
-test('les durées, les versions, les étapes et les réglages se calculent', () => {
-  expect(duree(12)).toBe('12 min')
-  expect(duree(65)).toBe('1 h 05')
+test('les versions, les étapes et les réglages se calculent', () => {
   expect(estPlusRecente('0.5.34', '0.5.33')).toBe(true)
   expect(estPlusRecente('0.6.0', '0.5.99')).toBe(true)
   expect(estInstallee('0.5.38', '0.5.38')).toBe(true)
   expect(estInstallee('0.5.39', '0.5.38')).toBe(true)
   expect(estInstallee('0.5.37', '0.5.38')).toBe(false)
-  expect(
-    reste({
-      but: 'x',
-      debut: 0,
-      travailMs: 0,
-      tours: 1,
-      phase: 'analyse',
-      sousTaches: [
-        { titre: 'a', etat: 'faite', minutes: 10 },
-        { titre: 'b', etat: 'en_cours', minutes: 15 },
-        { titre: 'c', etat: 'programmee', minutes: 5 },
-      ],
-    }),
-  ).toBe(20)
 
   const site = installationDe(REGLAGES)
   expect(etapesDe({ estCloud: false }).map(([cle]) => cle)).toEqual(['analyse', 'developpement', 'verification'])
@@ -175,7 +148,7 @@ test('les durées, les versions, les étapes et les réglages se calculent', () 
 test('un agent ne tient pas le suivi : son appel est refusé, celui de la session passe', async ($, on) => {
   // Bug du 2026-11-20 : le hook `tool.offer` n'existe pas sur le moteur 2.1.326,
   // le module ne se chargeait pas du tout.
-  monde(on, { estCloud: false, panneau: true })
+  monde(on, { estCloud: false })
   await demarrer($)
 
   const agent = await $.tool.call({ ...DEMANDE, agentId: 'agent-1' })
@@ -185,58 +158,52 @@ test('un agent ne tient pas le suivi : son appel est refusé, celui de la sessio
   expect(session.deny ?? session.isError).toBeUndefined()
 })
 
-test('en local, le panneau suffit : ni page, ni GitHub, clôture à la demande', async ($, on) => {
-  const { ecritures, soumis, fermes } = monde(on, { estCloud: false, panneau: true })
+test('en local aussi, le suivi n’est que la page : jamais de panneau texte, ni GitHub', async ($, on) => {
+  // Bug du 2026-11-21 : en local, le panneau texte s'ouvrait en plus de la page publiée ; le propriétaire ne veut que la page.
+  const { ecritures, soumis, fermes, ouverts } = monde(on, { estCloud: false })
   await demarrer($)
+  // Un panneau texte resté d'une version précédente se referme au démarrage.
+  expect(fermes).toEqual(['suivi-demande'])
 
   const sans = await $.tool.call({ tool: OUTIL, phase: 'developpement' })
   expect(sans.deny ?? sans.isError).toBeTruthy()
 
   const cree = await $.tool.call({ ...DEMANDE, branche: 'feature/ignoree', pr: 12, ci: 'verte' })
   expect(cree.deny ?? cree.isError).toBeUndefined()
-  expect(dit(cree)).toMatch(/panneau affiché, aucune page à publier/)
-  expect(dit(cree)).not.toMatch(/aucune page reliée/)
+  expect(dit(cree)).toMatch(/aucune page reliée/)
+  expect(dit(cree)).not.toMatch(/panneau/)
 
-  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
-    const ui = await $.ui.mount({ ...PANNEAU, surface })
-
-    expect(await ui.find({ type: 'Text', text: /Ajouter un panneau de suivi/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Le brancher \(10 min\) — tech-front/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Reste estimé : environ 15 min/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Vérification/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Publication|GITHUB|feature\/ignoree|PR #12/ })).toBeUndefined()
-    await ui.unmount()
+  const reliee = await $.tool.call({ tool: OUTIL, page: PAGE })
+  expect(dit(reliee)).toMatch(/page à jour/)
+  const envoye = ecritures.at(-1)?.data as {
+    demande: { but: string; branche?: string; pr?: number; sousTaches: { titre: string; agent?: string }[] }
+    etapes: [string, string][]
+    github: boolean
   }
+  expect(envoye.demande.but).toBe('Ajouter un panneau de suivi')
+  expect(envoye.demande.sousTaches[1]).toMatchObject({ titre: 'Le brancher', agent: 'tech-front' })
+  expect(envoye.github).toBe(false)
+  expect(envoye.demande.branche).toBeUndefined()
+  expect(envoye.demande.pr).toBeUndefined()
+  expect(envoye.etapes.map(([cle]) => cle)).toEqual(['analyse', 'developpement', 'verification'])
 
   // Une étape de GitHub n'existe pas en local : elle est ignorée.
   const publiee = await $.tool.call({ tool: OUTIL, phase: 'publication' })
   expect(dit(publiee)).toMatch(/phase analyse/)
 
-  const clos = await $.command.run({
-    command: 'suivi',
-    args: 'clore',
-    origin: { kind: 'composer' },
-    presentation: { isFullscreen: false, columns: 80 },
-  })
-  const rouvert = await $.command.run({
-    command: 'suivi',
-    args: '',
-    origin: { kind: 'composer' },
-    presentation: { isFullscreen: false, columns: 80 },
-  })
-  expect(rouvert.text).toBe('Suivi ouvert.')
-  expect(clos.text).toBe('Suivi clos.')
-  expect(fermes).toEqual(['suivi-demande'])
-  expect(ecritures).toEqual([])
-  expect(soumis).toEqual([])
+  const ouvert = await $.command.run({ ...COMMANDE, args: '' })
+  expect(ouvert.text).toBe(`Le suivi est sur la page ${PAGE}`)
 
-  const ui = await $.ui.mount({ ...PANNEAU, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /Aucune demande suivie/ })).toBeDefined()
-  await ui.unmount()
+  await $.turn.start({ text: 'clos', turnId: 't1' })
+  const clos = await $.tool.call({ tool: OUTIL, phase: 'terminee' })
+  expect(dit(clos)).toMatch(/Supprime la page de suivi/)
+  await $.turn.complete({ answer: '', durationMs: 0, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(soumis).toEqual([])
+  expect(ouverts).toEqual([])
 })
 
-test('en cloud, sans panneau : la page est demandée, tenue à jour, et la fusion clôt le suivi', async ($, on) => {
-  const { ecritures, soumis } = monde(on, { estCloud: true, panneau: false })
+test('en cloud : la page est demandée, tenue à jour, et la fusion clôt le suivi', async ($, on) => {
+  const { ecritures, soumis } = monde(on, { estCloud: true })
   await demarrer($)
 
   const cree = await $.tool.call({ ...DEMANDE, branche: 'feature/panneau-de-suivi' })
@@ -280,7 +247,6 @@ test('les réglages suivent le dépôt de la demande, pas le dossier de la sessi
   let servie = '0.5.44'
   const { ecritures, soumis } = monde(on, {
     estCloud: true,
-    panneau: false,
     reglages: REGLAGES,
     depot: '/home/user/maverickcenter',
     servie: () => servie,
@@ -310,7 +276,6 @@ test('les réglages suivent le dépôt de la demande, pas le dossier de la sessi
 test('une PR ouverte dans un dépôt voisin fait lire ses réglages', async ($, on) => {
   const { ecritures } = monde(on, {
     estCloud: true,
-    panneau: false,
     reglages: REGLAGES,
     depot: '/home/user/maverickcenter',
   })
@@ -336,10 +301,8 @@ test('une PR ouverte dans un dépôt voisin fait lire ses réglages', async ($, 
   expect(apres.installation).toBe('Site de dev')
 })
 
-const COMMANDE = { command: 'suivi', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as const
-
-test('sans panneau, /suivi mène à la page : il la fait publier, puis donne son adresse', async ($, on) => {
-  const { ecritures, soumis, temps } = monde(on, { estCloud: true, panneau: false })
+test('/suivi mène à la page : il la fait publier, puis donne son adresse', async ($, on) => {
+  const { ecritures, soumis, temps } = monde(on, { estCloud: true })
   await demarrer($)
 
   const sansPage = await $.command.run({ ...COMMANDE, args: '' })
@@ -381,7 +344,7 @@ test('sans panneau, /suivi mène à la page : il la fait publier, puis donne son
 })
 
 test('reprendre la même demande ne remet ni le début ni le temps à zéro', async ($, on) => {
-  const { ecritures } = monde(on, { estCloud: true, panneau: false })
+  const { ecritures } = monde(on, { estCloud: true })
   await demarrer($)
   await $.tool.call({ ...DEMANDE, page: PAGE })
   await tour($, 't1', 120_000)
@@ -400,7 +363,7 @@ test('reprendre la même demande ne remet ni le début ni le temps à zéro', as
 
 test('un dépôt qui règle son site : la fusion ouvre l’installation, la version cible la clôt', async ($, on) => {
   let servie = '0.5.37'
-  const { ecritures, soumis } = monde(on, { estCloud: true, panneau: false, reglages: REGLAGES, servie: () => servie })
+  const { ecritures, soumis } = monde(on, { estCloud: true, reglages: REGLAGES, servie: () => servie })
   await demarrer($)
   await $.tool.call({ ...DEMANDE, page: PAGE, pr: 7 })
 
@@ -446,16 +409,6 @@ const ENTRAINEMENT = {
 const statut = (epoque: number, fini = false) =>
   JSON.stringify({ epoque, max_epoques: 40, duree_epoque_s: 1500, fini })
 
-/** Ce que le panneau affiche sur la sous-tâche du compteur. */
-const ligneDuCompteur = async ($: Engine) => {
-  const ui = await $.ui.mount({ ...PANNEAU, surface: 'desktop' })
-  const ligne = await ui.find({ type: 'Text', text: /Entraîner le modèle/ })
-  const vue = ligne === undefined ? '' : JSON.stringify(ligne)
-  await ui.unmount()
-
-  return vue
-}
-
 /** Le compteur de la dernière écriture de la page. */
 const compteurDeLaPage = (ecritures: Record<string, unknown>[]) =>
   (ecritures.at(-1)?.data as { demande: { sousTaches: { compteur?: { valeur?: number; total?: number } }[] } })
@@ -472,32 +425,26 @@ test('un compteur se lit dans un fichier JSON, décalage compris, sans dépasser
   expect(lireCompteur('{"epoque": 6, "max_ep', reglage)).toBeUndefined()
   expect(lireCompteur('null', reglage)).toBeUndefined()
   expect(lireCompteur('', reglage)).toBeUndefined()
-
-  expect(texteCompteur({ ...reglage, valeur: 7, total: 40 })).toBe('Époque 7/40')
-  expect(texteCompteur({ fichier: STATUT, cle: 'lot', valeur: 3 })).toBe('lot 3')
-  expect(texteCompteur(reglage)).toBe('Époque : fichier pas encore lu')
 })
 
-test('le compteur se relit seul une fois par minute, sans tour de la session, panneau et page compris', async ($, on) => {
+test('le compteur se relit seul une fois par minute, sans tour de la session, et la page le montre', async ($, on) => {
   const fichiers: Record<string, string | undefined> = { [STATUT]: statut(6) }
-  const { ecritures, temps, lus } = monde(on, { estCloud: false, panneau: true, fichiers })
+  const { ecritures, temps, lus } = monde(on, { estCloud: false, fichiers })
   await demarrer($)
 
   const cree = await $.tool.call({ ...ENTRAINEMENT, page: PAGE })
-  expect(dit(cree)).toMatch(/panneau affiché ; page à jour/)
+  expect(dit(cree)).toMatch(/page à jour/)
   expect(lus).toHaveLength(1)
-  expect(await ligneDuCompteur($)).toMatch(/Époque 7\/40/)
   expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 7, total: 40 })
 
   // L'époque avance pendant que la session est inactive : aucun tour ne commence.
   fichiers[STATUT] = statut(7)
   await temps.advance(5000)
   expect(lus).toHaveLength(1)
-  expect(await ligneDuCompteur($)).toMatch(/Époque 7\/40/)
+  expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 7, total: 40 })
 
   await temps.advance(55_000)
   expect(lus).toHaveLength(2)
-  expect(await ligneDuCompteur($)).toMatch(/Époque 8\/40/)
   expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 8, total: 40 })
 
   // Une valeur qui n'a pas bougé ne réécrit pas la page.
@@ -509,31 +456,29 @@ test('le compteur se relit seul une fois par minute, sans tour de la session, pa
 
 test('un fichier absent ou un JSON invalide ne casse rien : la dernière valeur reste', async ($, on) => {
   const fichiers: Record<string, string | undefined> = { [STATUT]: undefined }
-  const { ecritures, temps, lus } = monde(on, { estCloud: false, panneau: true, fichiers })
+  const { ecritures, temps, lus } = monde(on, { estCloud: false, fichiers })
   await demarrer($)
 
   // Le fichier n'existe pas encore : l'entraînement n'a pas commencé.
   const cree = await $.tool.call({ ...ENTRAINEMENT, page: PAGE })
   expect(cree.deny ?? cree.isError).toBeUndefined()
-  expect(await ligneDuCompteur($)).toMatch(/Époque : fichier pas encore lu/)
+  expect(compteurDeLaPage(ecritures)?.valeur).toBeUndefined()
 
   fichiers[STATUT] = statut(2)
   await temps.advance(60_000)
-  expect(await ligneDuCompteur($)).toMatch(/Époque 3\/40/)
+  expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 3, total: 40 })
 
   // Écriture coupée en plein milieu, puis fichier retiré : la valeur lue reste.
   fichiers[STATUT] = '{"epoque": 3, "max_ep'
   await temps.advance(60_000)
-  expect(await ligneDuCompteur($)).toMatch(/Époque 3\/40/)
+  expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 3, total: 40 })
   fichiers[STATUT] = undefined
   await temps.advance(60_000)
   expect(lus).toHaveLength(4)
-  expect(await ligneDuCompteur($)).toMatch(/Époque 3\/40/)
   expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 3, total: 40 })
 
   // La session redonne ses sous-tâches avant la lecture suivante : le compteur garde sa valeur.
   await $.tool.call({ tool: OUTIL, sous_taches: ENTRAINEMENT.sous_taches, reste_minutes: 600 })
   expect(lus).toHaveLength(4)
-  expect(await ligneDuCompteur($)).toMatch(/Époque 3\/40/)
   expect(compteurDeLaPage(ecritures)).toMatchObject({ valeur: 3, total: 40 })
 })

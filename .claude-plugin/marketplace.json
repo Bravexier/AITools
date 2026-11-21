@@ -5,7 +5,7 @@
     {
       "name": "suivi-demande",
       "source": "./plugins/suivi-demande",
-      "description": "Suivi de la demande en cours : but, étapes, sous-tâches, temps de travail, reste estimé et agents, dans un panneau en local et une page publiée en cloud."
+      "description": "Suivi de la demande en cours : but, étapes, sous-tâches, temps de travail, reste estimé et agents, dans une page publiée, en local comme en cloud."
     }
   ]
 }

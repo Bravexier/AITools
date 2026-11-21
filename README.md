@@ -8,7 +8,7 @@ Ce dépôt est un marketplace : `.claude-plugin/marketplace.json` liste les plug
 
 | Plugin | Rôle |
 | --- | --- |
-| [`suivi-demande`](plugins/suivi-demande/README.md) | Suit chaque demande : but, étapes, sous-tâches, temps, agents. Panneau en local, page publiée en cloud. |
+| [`suivi-demande`](plugins/suivi-demande/README.md) | Suit chaque demande : but, étapes, sous-tâches, temps, agents. Dans une page publiée, en local comme en cloud. |
 
 ## Installer un plugin
 

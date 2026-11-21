@@ -4,8 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Agent, Cadre, Compteur, Demande, Etat, Installation, Page, Phase, SousTache } from '../types'
 
 const MOD = 'suivi-demande'
-const PANNEAU = 'suivi-demande'
-const TITRE = 'Suivi de la demande'
+/** Le panneau texte des versions 1.1 et avant : refermé s'il reste ouvert, le suivi n'est plus que la page. */
+const ANCIEN_PANNEAU = 'suivi-demande'
 const OUTIL = 'mcp__suivi-demande__suivre'
 /** Le fichier par lequel un dépôt règle le suivi (aujourd'hui : son site d'installation). */
 const REGLAGES = '.claude/suivi-demande.json'
@@ -21,10 +21,8 @@ const principal = atom(
 )
 const page = atom({ plugin: 'suivi-demande', key: 'page' } as const, {}, { shape: 'page-2' })
 const cadre = atom({ plugin: 'suivi-demande', key: 'cadre' } as const, { estCloud: false }, { shape: 'cadre-1' })
-const horloge = atom({ plugin: 'suivi-demande', key: 'horloge' } as const, 0)
 
 const ETATS: readonly Etat[] = ['faite', 'en_cours', 'programmee', 'en_attente']
-const EN_VIE = ['pending', 'running', 'waiting', 'idle']
 
 type Etape = readonly [Phase, string]
 
@@ -40,12 +38,12 @@ export const etapesDe = (un: Cadre): readonly Etape[] => [
 const consigne = (un: Cadre, racine: string) =>
   [
     '## Suivi de la demande',
-    `Le propriétaire suit la demande en cours dans un panneau ou une page publiée, tenus par l'outil ${OUTIL}. Une demande qui ne change aucun fichier (question, analyse en lecture) n'ouvre pas de suivi.`,
+    `Le propriétaire suit la demande en cours dans une page publiée, tenue par l'outil ${OUTIL}. Une demande qui ne change aucun fichier (question, analyse en lecture) n'ouvre pas de suivi.`,
     "- Au premier message d'une demande : `nouvelle: true`, le but en une phrase, les sous-tâches prévues et la durée estimée de chacune en minutes.",
     `- Quand il poursuit la demande, puis à chaque changement d'état d'une sous-tâche${un.estCloud ? ', de phase, de branche, de PR ou de CI' : ' ou de phase'} : seulement les champs qui changent (\`sous_taches\` se donne toujours en entier).`,
     '- Quand tu attends sa réponse ou son accord : `attente`, en une phrase ; une chaîne vide quand ce n’est plus le cas.',
     "- Un appel par changement, groupé avec tes autres appels d'outils ; ne commente pas le suivi dans tes réponses.",
-    `- Si le résultat de l'outil dit « aucune page reliée » : lis puis publie telle quelle ${racine}/page/suivi-demande.html (outil Artifact, \`capabilities: {"db": {}, "user": {}}\`, icône \`activity\` ; la page est déjà conçue), puis donne son adresse dans \`page\`. S'il dit « panneau affiché », ne publie rien.`,
+    `- Si le résultat de l'outil dit « aucune page reliée » : lis puis publie telle quelle ${racine}/page/suivi-demande.html (outil Artifact, \`capabilities: {"db": {}, "user": {}}\`, icône \`activity\` ; la page est déjà conçue), puis donne son adresse dans \`page\`.`,
     ...(un.estCloud && un.installation === undefined
       ? [
           '- Ta propre fusion de la PR clôt le suivi sans toi. Si la PR est fusionnée autrement (événement GitHub, fusion par le propriétaire) : `phase: "terminee"`.',
@@ -201,13 +199,6 @@ export const lireCompteur = (contenu: string, compteur: Compteur): { valeur: num
   return total === undefined ? { valeur } : { valeur: Math.min(valeur, total), total }
 }
 
-export const texteCompteur = (compteur: Compteur) => {
-  const nom = compteur.libelle ?? compteur.cle
-  if (compteur.valeur === undefined) return `${nom} : fichier pas encore lu`
-
-  return `${nom} ${compteur.valeur}${compteur.total !== undefined ? `/${compteur.total}` : ''}`
-}
-
 const memeLecture = (a: Compteur, b: Compteur) =>
   a.fichier === b.fichier && a.cle === b.cle && a.totalCle === b.totalCle && a.decalage === b.decalage
 
@@ -221,22 +212,6 @@ const garderLesLectures = (liste: SousTache[] | undefined, avant: readonly SousT
 
     return { ...une, compteur: { ...compteur, valeur: lu.valeur, ...(lu.total !== undefined && { total: lu.total }) } }
   })
-
-export const duree = (minutes: number) => {
-  const arrondi = Math.max(0, Math.round(minutes))
-  if (arrondi < 60) return `${arrondi} min`
-
-  return `${Math.floor(arrondi / 60)} h ${String(arrondi % 60).padStart(2, '0')}`
-}
-
-/** Le reste à faire : celui que la session principale a dit, sinon la somme des sous-tâches non faites. */
-export const reste = (demande: Demande) => {
-  if (demande.resteMinutes !== undefined) return demande.resteMinutes
-  const ouvertes = demande.sousTaches.filter(une => une.etat !== 'faite')
-  if (!ouvertes.some(une => une.minutes !== undefined)) return undefined
-
-  return ouvertes.reduce((somme, une) => somme + (une.minutes ?? 0), 0)
-}
 
 export const estPlusRecente = (version: string, reference: string) => {
   const a = version.split('.').map(Number)
@@ -351,7 +326,7 @@ const releverLesCompteurs = async ($: EngineInterface) => {
 
     return { ...une, compteur: { ...reglage, ...lu } }
   }
-  // Rien n'est écrit si aucune valeur n'a bougé : ni le panneau ni la page ne sont redessinés pour rien.
+  // Rien n'est écrit si aucune valeur n'a bougé : la page n'est pas réécrite pour rien.
   const { demande: actuelle } = await read($, suivi)
   if (actuelle !== null && actuelle.sousTaches.some(une => relire(une) !== une)) {
     await modifier($, une => ({ ...une, sousTaches: une.sousTaches.map(relire) }))
@@ -451,7 +426,7 @@ const demandeDeSuppression = (adresse: string) =>
   `[suivi-demande] Suivi clos. Supprime la page de suivi ${adresse} (Artifact, action delete ; le propriétaire confirme dans l'application) et préviens-le en une phrase.`
 
 /**
- * Clôt le suivi : plus de demande, panneau fermé, page marquée terminée puis
+ * Clôt le suivi : plus de demande, page marquée terminée puis
  * détachée. La page reste à supprimer par la session : `direct` rend la
  * demande de suppression à qui peut la lui dire tout de suite (le résultat
  * d'un outil, d'une commande) ; sinon elle attend `annoncer`.
@@ -462,7 +437,6 @@ const cloturer = async ($: EngineInterface, motif: string, direct = false): Prom
   const cible = await read($, page)
   await update($, suivi, () => ({ demande: null }))
   $.ui.toast(`Suivi clos : ${motif}.`)
-  await $.ui.close({ id: PANNEAU })
   await pousser($, { but: demande.but, motif, le: await $.clock.now() })
   const adresse = cible.url
   await update($, page, () => (adresse === undefined || direct ? {} : { aSupprimer: adresse }))
@@ -522,17 +496,17 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'suivre',
       description:
-        'Tient le suivi de la demande du propriétaire (panneau ou page publiée). À appeler au début de chaque demande qui change des fichiers (`nouvelle`, `but`, `sous_taches`), puis à chaque changement : sous-tâches et durées estimées, reste à faire, phase, attente du propriétaire. Seuls les champs donnés changent.',
+        'Tient le suivi de la demande du propriétaire (page publiée). À appeler au début de chaque demande qui change des fichiers (`nouvelle`, `but`, `sous_taches`), puis à chaque changement : sous-tâches et durées estimées, reste à faire, phase, attente du propriétaire. Seuls les champs donnés changent.',
       inputSchema: schema(un),
       isDeferred: false,
     })
     await $.command.register({
       name: 'suivi',
-      description: 'Ouvrir le suivi de la demande ; `/suivi clore` le clôt',
+      description: 'Donner la page de suivi de la demande ; `/suivi clore` le clôt',
       argumentHint: '[clore]',
     })
-    // Le panneau ne s'ouvre de lui-même que s'il a une demande à montrer.
-    if ((await read($, suivi)).demande !== null) void $.ui.open({ id: PANNEAU, title: TITRE })
+    // Le suivi n'est plus que la page : un panneau texte resté d'une version précédente se referme.
+    void $.ui.close({ id: ANCIEN_PANNEAU }).catch(() => undefined)
 
     let battement = 0
     $.clock.every(5000, () => {
@@ -540,7 +514,6 @@ export const register: Register = on => {
       void (async () => {
         await releverLesCompteurs($)
         await mettreAJour($)
-        if (battement % 6 === 0) await update($, horloge, () => battement)
         if (battement % 12 === 0) await guetterLInstallation($)
         // Hors d'un tour seulement : pendant un tour, c'est `turn.complete` qui annonce.
         if (!(await read($, principal)).estActif) await annoncer($)
@@ -568,16 +541,13 @@ export const register: Register = on => {
 
       return { text: suite === undefined ? 'Suivi clos.' : 'Suivi clos. La session supprime sa page : confirmez dans l’application.' }
     }
-    const place = await $.ui.open({ id: PANNEAU, title: TITRE })
-    if (place.isPlaced) return { text: 'Suivi ouvert.' }
-    // Aucun panneau ne se dessine ici (session cloud) : le suivi est une page.
     const adresse = (await read($, page)).url
-    if (adresse !== undefined) return { text: `Aucun panneau dans cette session : le suivi est sur la page ${adresse}` }
+    if (adresse !== undefined) return { text: `Le suivi est sur la page ${adresse}` }
     aDemander.push(
-      `[suivi-demande] Le propriétaire demande à voir le suivi et aucun panneau ne se dessine dans cette session. Lis puis publie telle quelle ${$.plugin.root}/page/suivi-demande.html (outil Artifact, \`capabilities: {"db": {}, "user": {}}\`, icône \`activity\`), donne son adresse à l'outil ${OUTIL} dans \`page\`, puis donne-lui le lien en une phrase.`,
+      `[suivi-demande] Le propriétaire demande à voir le suivi et aucune page n'est reliée. Lis puis publie telle quelle ${$.plugin.root}/page/suivi-demande.html (outil Artifact, \`capabilities: {"db": {}, "user": {}}\`, icône \`activity\`), donne son adresse à l'outil ${OUTIL} dans \`page\`, puis donne-lui le lien en une phrase.`,
     )
 
-    return { text: 'Aucun panneau dans cette session : la page de suivi est en cours de publication.' }
+    return { text: 'La page de suivi est en cours de publication.' }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -742,14 +712,8 @@ export const register: Register = on => {
     if (un.installation !== undefined && demande.phase === 'installation' && avant?.phase !== 'installation') {
       await entrerEnInstallation($, un.installation)
     }
-    const place = await $.ui.open({ id: PANNEAU, title: TITRE })
-    // Un panneau affiché suffit : aucune page n'est demandée, mais une page déjà reliée reste tenue à jour.
+    // Le suivi ne s'affiche que dans la page : sans page reliée, la session la publie (voir la consigne).
     const envoi = await pousser($)
-    const affichage = place.isPlaced
-      ? envoi === 'aucune page reliée'
-        ? 'panneau affiché, aucune page à publier'
-        : `panneau affiché ; ${envoi}`
-      : envoi
     await sauver($)
 
     const faites = demande.sousTaches.filter(une => une.etat === 'faite').length
@@ -759,151 +723,7 @@ export const register: Register = on => {
         : ''
 
     return {
-      result: `Suivi à jour : ${faites}/${demande.sousTaches.length} sous-tâches faites, phase ${demande.phase} ; ${affichage}.${manque}`,
+      result: `Suivi à jour : ${faites}/${demande.sousTaches.length} sous-tâches faites, phase ${demande.phase} ; ${envoi}.${manque}`,
     }
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANNEAU }, async ($, e) => {
-    const { Box, Text, Progress } = $.ui.resolve(e)
-    const { demande } = await read($, suivi)
-    const liste = await read($, agents)
-    const session = await read($, principal)
-    const un = await read($, cadre)
-    await read($, horloge)
-    const maintenant = await $.clock.now()
-
-    const enVie = liste.filter(agent => EN_VIE.includes(agent.statut))
-    const finis = liste.filter(agent => !EN_VIE.includes(agent.statut)).slice(-5)
-    const profondeur = (agent: Agent): number => {
-      const parent = liste.find(autre => autre.id === agent.parentId)
-
-      return parent === undefined ? 0 : 1 + profondeur(parent)
-    }
-    const nom = (agent: Agent) => `${'  '.repeat(profondeur(agent))}${agent.type} · ${agent.description}`
-    const depuis = (agent: Agent) => duree((maintenant - agent.debut) / 60000)
-
-    const ligneAgent = (agent: Agent) => {
-      if (agent.statut === 'running') return <Progress label={`${nom(agent)} — en marche depuis ${depuis(agent)}`} />
-      if (agent.statut === 'pending') return <Text>◌ {nom(agent)} — en file</Text>
-      if (agent.statut === 'waiting') return <Text color="warning">⏸ {nom(agent)} — attend ses agents ou un accord</Text>
-      if (agent.statut === 'idle') return <Text color="warning">⏸ {nom(agent)} — attend une instruction</Text>
-      if (agent.statut === 'completed') return <Text dimColor>✓ {nom(agent)} — terminé</Text>
-
-      return <Text color="error">✗ {nom(agent)} — {agent.statut === 'killed' ? 'arrêté' : 'en échec'}</Text>
-    }
-
-    const lignePrincipale = () => {
-      if (session.attendReponse || demande?.attente !== undefined) {
-        return <Text color="warning">✋ Session principale — attend votre réponse</Text>
-      }
-      if (session.estActif) return <Progress label="Session principale — en marche" />
-      if (enVie.some(agent => agent.statut === 'running' || agent.statut === 'pending')) {
-        return <Text>⏸ Session principale — attend ses agents</Text>
-      }
-
-      return <Text color="warning">✋ Session principale — attend votre message</Text>
-    }
-
-    const blocAgents = (
-      <Box flexDirection="column">
-        <Text dimColor>AGENTS</Text>
-        {lignePrincipale()}
-        {enVie.map(ligneAgent)}
-        {finis.map(ligneAgent)}
-      </Box>
-    )
-
-    if (demande === null) {
-      return (
-        <Box flexDirection="column" gap={1}>
-          <Text dimColor>Aucune demande suivie. Le suivi se remplit à votre prochaine demande.</Text>
-          {blocAgents}
-        </Box>
-      )
-    }
-
-    const etapes = etapesDe(un)
-    const rang = etapes.findIndex(([cle]) => cle === demande.phase)
-    const faites = demande.sousTaches.filter(une => une.etat === 'faite').length
-    const aFaire = reste(demande)
-    const marque: Record<Etat, string> = { faite: '✓', en_cours: '▶', programmee: '○', en_attente: '⏸' }
-
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Box flexDirection="column">
-          <Text dimColor>BUT</Text>
-          <Text>{demande.but}</Text>
-          {demande.attente !== undefined && <Text color="warning">✋ Attend de vous : {demande.attente}</Text>}
-        </Box>
-
-        <Box flexDirection="column">
-          <Text dimColor>AVANCEMENT</Text>
-          <Text>
-            {etapes.map(([, libelle], i) => `${i < rang ? '✓' : i === rang ? '▶' : '·'} ${libelle}`).join('  ')}
-          </Text>
-          {demande.sousTaches.length > 0 && (
-            <Progress
-              label="Sous-tâches"
-              value={faites}
-              max={demande.sousTaches.length}
-              valueText={`${faites}/${demande.sousTaches.length}`}
-            />
-          )}
-          <Text>
-            Temps de travail : {duree(demande.travailMs / 60000)} · commencée il y a{' '}
-            {duree((maintenant - demande.debut) / 60000)} · {demande.tours} tour
-            {demande.tours > 1 ? 's' : ''} de travail
-          </Text>
-          <Text>Reste estimé : {aFaire === undefined ? 'non estimé' : `environ ${duree(aFaire)}`}</Text>
-        </Box>
-
-        {demande.sousTaches.length > 0 && (
-          <Box flexDirection="column">
-            <Text dimColor>SOUS-TÂCHES</Text>
-            {demande.sousTaches.map(une => (
-              <Text
-                dimColor={une.etat === 'faite'}
-                {...(une.etat === 'en_attente' && { color: 'warning' })}
-              >
-                {marque[une.etat]} {une.titre}
-                {une.minutes !== undefined ? ` (${duree(une.minutes)})` : ''}
-                {une.agent !== undefined ? ` — ${une.agent}` : ''}
-                {une.compteur !== undefined ? ` — ${texteCompteur(une.compteur)}` : ''}
-                {une.etat === 'programmee' ? ' — programmée' : ''}
-                {une.etat === 'en_attente' ? ' — en attente' : ''}
-              </Text>
-            ))}
-          </Box>
-        )}
-
-        {blocAgents}
-
-        {un.estCloud && (
-          <Box flexDirection="column">
-            <Text dimColor>GITHUB</Text>
-            <Text>
-              {demande.branche === undefined ? 'Pas encore de branche' : `Branche ${demande.branche}`}
-              {demande.pr !== undefined ? ` · PR #${demande.pr}` : ''}
-            </Text>
-            {demande.ci === 'en_cours' && <Progress label="CI en cours" />}
-            {demande.ci === 'verte' && <Text color="success">✓ CI verte</Text>}
-            {demande.ci === 'rouge' && <Text color="error">✗ CI rouge</Text>}
-          </Box>
-        )}
-
-        {un.installation !== undefined && (
-          <Box flexDirection="column">
-            <Text dimColor>{un.installation.nom.toUpperCase()}</Text>
-            {demande.phase === 'installation' ? (
-              <Progress
-                label={`Installation en cours : attendue ${demande.versionCible !== undefined ? `V${demande.versionCible}` : 'à préciser'}, servie ${demande.versionSite !== undefined ? `V${demande.versionSite}` : 'inconnue'}`}
-              />
-            ) : (
-              <Text dimColor>Pas encore fusionnée : rien à installer.</Text>
-            )}
-          </Box>
-        )}
-      </Box>
-    )
   })
 }

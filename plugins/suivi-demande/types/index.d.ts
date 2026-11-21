@@ -102,7 +102,7 @@ export type Installation = {
   consigne?: string
 }
 
-/** Où tourne la session, et ce que le dépôt a réglé : décide des étapes et des blocs affichés. */
+/** Où tourne la session, et ce que le dépôt a réglé : décide des étapes et des blocs affichés sur la page. */
 export type Cadre = { estCloud: boolean; installation?: Installation }
 
 declare module 'claude-code' {
@@ -113,7 +113,6 @@ declare module 'claude-code' {
       principal: Shaped<Principal>
       page: Shaped<Page>
       cadre: Shaped<Cadre>
-      horloge: number
     }
   }
 }
