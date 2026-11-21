@@ -1,6 +1,6 @@
 {
   "name": "suivi-demande",
-  "version": "1.1.0",
-  "description": "Suivi de la demande en cours : but, étapes, sous-tâches, temps de travail, reste estimé et agents, dans un panneau en local et une page publiée en cloud.",
+  "version": "1.2.0",
+  "description": "Suivi de la demande en cours : but, étapes, sous-tâches, temps de travail, reste estimé et agents, dans une page publiée, en local comme en cloud.",
   "types": "./types/index.d.ts"
 }

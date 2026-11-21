@@ -1,13 +1,14 @@
 # suivi-demande
 
-Suit chaque demande faite à Claude Code et l'affiche à côté de la conversation : but, étapes, sous-tâches (faites, en cours, programmées, en attente) avec leurs durées estimées, temps de travail mesuré, reste estimé, et agents (en marche, en file, en attente d'un agent, en attente de vous, terminés).
+Suit chaque demande faite à Claude Code et l'affiche dans une page publiée, à côté de la conversation : but, étapes, sous-tâches (faites, en cours, programmées, en attente) avec leurs durées estimées, temps de travail mesuré, reste estimé, et agents (en marche, en file, en attente d'un agent, en attente de vous, terminés).
 
 Installation : voir le [README du dépôt](../../README.md), avec `suivi-demande` pour nom de plugin.
 
 ## Où le suivi s'affiche
 
-- **Panneau du mod**, quand une surface le dessine (application de bureau, terminal). Il suffit : aucune page n'est publiée.
-- **Page publiée** (`page/suivi-demande.html`, Artifact avec les capacités `db` et `user`), quand aucun panneau ne se dessine : c'est le cas des sessions cloud. La session la publie à la première demande ; le mod écrit l'état dans le document `suivi/etat` de sa base, la page le lit en direct.
+Une seule vue, en local comme en cloud : la **page publiée** (`page/suivi-demande.html`, Artifact avec les capacités `db` et `user`). La session la publie à la première demande ; le mod écrit l'état dans le document `suivi/etat` de sa base, la page le lit en direct.
+
+Depuis la version 1.2.0, le mod n'ouvre plus de panneau texte : il doublait la page. Un panneau resté ouvert d'une version précédente se referme au démarrage de la session.
 
 ## Ce qui dépend de la session
 
@@ -18,7 +19,7 @@ Installation : voir le [README du dépôt](../../README.md), avec `suivi-demande
 | Clôture automatique | Jamais | À la fusion de la PR |
 | Clôture à la demande | `/suivi clore` | `/suivi clore` |
 
-Une nouvelle demande remplace le suivi en cours. À la clôture, le panneau se ferme ; s'il y avait une page, la session la supprime (l'application demande confirmation).
+Une nouvelle demande remplace le suivi en cours. À la clôture, la session supprime la page (l'application demande confirmation).
 
 ## Réglages d'un dépôt
 
@@ -43,7 +44,7 @@ Le fichier est lu dans le dépôt que la demande modifie : le dossier de la sess
 
 ## Compteur relu sans la session
 
-Une sous-tâche qui tourne sans la session (entraînement, lot de fichiers) peut porter un `compteur` : un programme écrit son avancement dans un fichier JSON local, et le mod le relit seul, au plus une fois par minute, même quand la session est inactive. Le panneau et la page affichent alors « Époque 7/40 » sur la sous-tâche, avec une jauge sur la page.
+Une sous-tâche qui tourne sans la session (entraînement, lot de fichiers) peut porter un `compteur` : un programme écrit son avancement dans un fichier JSON local, et le mod le relit seul, au plus une fois par minute, même quand la session est inactive. La page affiche alors « Époque 7/40 » sur la sous-tâche, avec une jauge.
 
 ```json
 {
@@ -70,7 +71,7 @@ Un fichier absent, en cours d'écriture ou invalide ne change rien : la dernièr
 
 - **Outil `mcp__suivi-demande__suivre`** : la session principale y déclare le but, les sous-tâches, la phase et ce qu'elle attend de vous. Une consigne ajoutée au prompt le lui rappelle ; les agents n'ont pas la consigne, et leur appel de l'outil est refusé.
 - **Relevé sans la session** : agents et leur état, temps de travail, tours de travail, ouverture et fusion d'une PR, compteurs lus dans un fichier local.
-- **Commande `/suivi`** : ouvre le panneau ; là où aucun panneau ne se dessine, donne l'adresse de la page ou la fait publier. `/suivi clore` clôt le suivi.
+- **Commande `/suivi`** : donne l'adresse de la page, ou la fait publier s'il n'y en a pas. `/suivi clore` clôt le suivi.
 - **Reprise** : l'état est gardé par session (`$.store`) et survit à un redémarrage. Redéclarer la même demande ne remet pas le temps à zéro.
 
 ## Limites
