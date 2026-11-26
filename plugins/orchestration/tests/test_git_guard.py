@@ -18,26 +18,40 @@ git_guard = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(git_guard)
 
 
+# Comme Claude Code : rien n'impose l'UTF-8 à Python (sous Windows, il prendrait cp1252).
+SANS_ENCODAGE_FORCE = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+
+
+def lancer_brut(entree: str):
+    """Lance le hook comme Claude Code : JSON en UTF-8 sur stdin, sortie lue en UTF-8
+    (octets invalides remplacés par U+FFFD). Rend (code de sortie, texte lu)."""
+    sortie = subprocess.run([sys.executable, HOOK], input=entree.encode("utf-8"), capture_output=True,
+                            timeout=20, env=SANS_ENCODAGE_FORCE)
+    return sortie.returncode, sortie.stdout.decode("utf-8", "replace")
+
+
 def lancer(entree: str):
     """Lance le hook comme Claude Code : rend (code de sortie, décision ou None)."""
-    sortie = subprocess.run([sys.executable, HOOK], input=entree, capture_output=True, text=True, timeout=20)
-    if not sortie.stdout.strip():
-        return sortie.returncode, None
-    return sortie.returncode, json.loads(sortie.stdout)["hookSpecificOutput"]["permissionDecision"]
+    code, texte = lancer_brut(entree)
+    if not texte.strip():
+        return code, None
+    return code, json.loads(texte)["hookSpecificOutput"]["permissionDecision"]
 
 
 def evenement(commande, cwd=""):
-    return json.dumps({"tool_name": "Bash", "tool_input": {"command": commande}, "cwd": cwd})
+    # Comme Claude Code : les caractères non ASCII arrivent tels quels, pas en \uXXXX.
+    return json.dumps({"tool_name": "Bash", "tool_input": {"command": commande}, "cwd": cwd}, ensure_ascii=False)
 
 
 class DepotTemporaire:
     """Un dépôt Git jetable sur une branche donnée, pour les push implicites."""
 
-    def __init__(self, branche):
+    def __init__(self, branche, prefixe=None):
         self.branche = branche
+        self.prefixe = prefixe
 
     def __enter__(self):
-        self.dossier = tempfile.TemporaryDirectory()
+        self.dossier = tempfile.TemporaryDirectory(prefix=self.prefixe)
         subprocess.run(["git", "init", "-q", "-b", self.branche, self.dossier.name], check=True)
         return self.dossier.name
 
@@ -69,6 +83,22 @@ class CasDeLIssue(unittest.TestCase):
                        json.dumps({"tool_name": "Read", "tool_input": {"file_path": "x"}})]:
             with self.subTest(entree=entree):
                 self.assertEqual(lancer(entree), (0, None))
+
+
+class Encodage(unittest.TestCase):
+    """Claude Code envoie et lit de l'UTF-8, même sous Windows où Python prend cp1252 par défaut."""
+
+    def test_raison_lisible(self):
+        # Cassé si le hook écrit dans l'encodage local : Claude Code lirait « push forc� interdit ».
+        code, texte = lancer_brut(evenement("git push --force"))
+        self.assertEqual(code, 0)
+        self.assertIn("forcé", json.loads(texte)["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_push_implicite_depuis_un_dossier_accentue(self):
+        # Cassé si le hook lit stdin dans l'encodage local : le cwd « …dépôt… » devient « …dÃ©pÃ´t… »,
+        # git n'y trouve pas la branche courante et le push depuis main n'est plus refusé.
+        with DepotTemporaire("main", prefixe="dépôt-") as depot:
+            self.assertEqual(lancer(evenement("git push", depot)), (0, "deny"))
 
 
 class Analyse(unittest.TestCase):

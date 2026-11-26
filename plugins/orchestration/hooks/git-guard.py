@@ -301,7 +301,8 @@ def decider(commande: str, cwd: str = "") -> Decision:
 
 def main() -> int:
     try:
-        evenement = json.loads(sys.stdin.read() or "null")
+        # Claude Code envoie et lit de l'UTF-8 ; sous Windows, Python prendrait cp1252.
+        evenement = json.loads(sys.stdin.buffer.read().decode("utf-8") or "null")
         if not isinstance(evenement, dict) or evenement.get("tool_name") != "Bash":
             return 0
         entree = evenement.get("tool_input")
@@ -313,13 +314,13 @@ def main() -> int:
         if decision is None:
             return 0
         genre, raison = decision
-        sys.stdout.write(json.dumps({
+        sys.stdout.buffer.write(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": genre,
                 "permissionDecisionReason": f"git-guard : {raison}.",
             }
-        }, ensure_ascii=False))
+        }, ensure_ascii=False).encode("utf-8"))
     except Exception:  # Erreur interne : aucune décision.
         return 0
     return 0
