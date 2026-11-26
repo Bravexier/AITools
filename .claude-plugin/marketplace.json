@@ -1,11 +1,18 @@
 {
   "name": "aitools",
-  "owner": { "name": "Bravexier" },
+  "owner": {
+    "name": "Bravexier"
+  },
   "plugins": [
     {
       "name": "suivi-demande",
       "source": "./plugins/suivi-demande",
       "description": "Suivi de la demande en cours : but, étapes, sous-tâches, temps de travail, reste estimé et agents, dans une page publiée, en local comme en cloud."
+    },
+    {
+      "name": "orchestration",
+      "source": "./plugins/orchestration",
+      "description": "Travail à plusieurs agents : orchestrateur qui fait valider un plan complet, sous-agents bornés, Git protégé par hook, suivi de tâche pondéré et versionné."
     }
   ]
 }
