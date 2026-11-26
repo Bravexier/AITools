@@ -23,7 +23,9 @@ class Suivi(unittest.TestCase):
         ligne = [sys.executable, SCRIPT, "--file", self.fichier, *args]
         if data is not None:
             ligne += ["--data", json.dumps(data)]
-        sortie = subprocess.run(ligne, input=stdin or "", capture_output=True, text=True, timeout=20)
+        # Le script écrit en UTF-8 ; sans encoding, Windows décoderait sa sortie en cp1252.
+        sortie = subprocess.run(ligne, input=stdin or "", capture_output=True, text=True,
+                                encoding="utf-8", timeout=20)
         return sortie.returncode, sortie.stdout, sortie.stderr
 
     def lire(self):
@@ -73,6 +75,13 @@ class Suivi(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn("révision périmée", erreur)
         self.assertEqual(self.lire()["task"]["lastMessage"], "a")
+
+    def test_json_accentue_sur_stdin(self):
+        # Sous Windows, sans stdin en UTF-8, le script lirait « é » en cp1252 et l'abîmerait.
+        etat = {"task": {"title": "Étape réussie"}, "subtasks": [{"id": "1", "title": "Lot", "weight": 1}]}
+        code, _, erreur = self.cmd("update", "--expected-revision", "0", stdin=json.dumps(etat, ensure_ascii=False))
+        self.assertEqual(code, 0, erreur)
+        self.assertEqual(self.lire()["task"]["title"], "Étape réussie")
 
     def test_update_exige_aussi_la_revision(self):
         self.initialiser()

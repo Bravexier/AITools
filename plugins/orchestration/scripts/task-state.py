@@ -473,11 +473,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     arguments = analyseur.parse_args(argv)
     chemin = arguments.file or chemin_par_defaut()
 
-    if sys.stdout.encoding and sys.stdout.encoding.lower() not in {"utf-8", "utf8"}:
-        try:
-            sys.stdout.reconfigure(encoding="utf-8")
-        except Exception:
-            pass
+    # Entrées et sorties en UTF-8 : sous Windows, Python les prendrait sinon en cp1252.
+    for flux in (sys.stdin, sys.stdout, sys.stderr):
+        if (getattr(flux, "encoding", None) or "").lower() not in {"utf-8", "utf8"}:
+            try:
+                flux.reconfigure(encoding="utf-8")
+            except Exception:
+                pass
     try:
         if arguments.commande == "observe":
             observer(chemin)

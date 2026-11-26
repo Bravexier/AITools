@@ -66,9 +66,11 @@ class Hooks(unittest.TestCase):
         self.assertEqual(self.contexte(ORCHESTRATION_DISABLED="1"), (0, ""))
 
     def test_lanceur_python(self):
-        sortie = subprocess.run(["sh", os.path.join(RACINE, "scripts", "py.sh"), "-c", "print('ok')"],
+        # Code sans apostrophes ni guillemets : sous Windows, le sh de Git relit la ligne de
+        # commande et les retire (print('ok') y deviendrait print(ok)).
+        sortie = subprocess.run(["sh", os.path.join(RACINE, "scripts", "py.sh"), "-c", "print(42)"],
                                 capture_output=True, text=True, timeout=20)
-        self.assertEqual((sortie.returncode, sortie.stdout.strip()), (0, "ok"))
+        self.assertEqual((sortie.returncode, sortie.stdout.strip()), (0, "42"))
 
 
 if __name__ == "__main__":
