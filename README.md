@@ -9,6 +9,7 @@ Ce dépôt est un marketplace : `.claude-plugin/marketplace.json` liste les plug
 | Plugin | Rôle |
 | --- | --- |
 | [`suivi-demande`](plugins/suivi-demande/README.md) | Suit chaque demande : but, étapes, sous-tâches, temps, agents. Dans une page publiée, en local comme en cloud. |
+| [`orchestration`](plugins/orchestration/README.md) | Travail à plusieurs agents : plan complet validé avant exécution, sous-agents bornés, Git protégé, suivi pondéré (`/task-status`). |
 
 ## Installer un plugin
 
@@ -42,11 +43,13 @@ Dans les réglages de l'environnement cloud, le script de démarrage installe le
 #!/bin/bash
 # Plugins Claude Code du marketplace Bravexier/AITools, pour toutes les sessions.
 if command -v claude >/dev/null 2>&1; then
-  claude plugin install <plugin> --marketplace Bravexier/AITools --scope user || true
+  for plugin in suivi-demande orchestration; do
+    claude plugin install "$plugin" --marketplace Bravexier/AITools --scope user || true
+  done
 fi
 ```
 
-Chaque session neuve prend alors la dernière version publiée sur `main`.
+Chaque session neuve prend alors la dernière version publiée sur `main`. Retirer de la liste `for` les plugins non voulus.
 
 ## Ajouter un plugin
 
