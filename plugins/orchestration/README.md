@@ -45,7 +45,7 @@ Aucun agent n'a l'outil de délégation (`Agent`) : seul l'orchestrateur enchaî
 | Skill `subagent-contract` | `skills/subagent-contract/SKILL.md` | Règles communes et format du rapport |
 | Skill `task-tracking` | `skills/task-tracking/SKILL.md` | Modèle et usage du suivi |
 | Agents | `agents/*.md` | Les cinq rôles ci-dessus |
-| Garde-fou Git | `hooks/git-guard.py`, hook `PreToolUse` (Bash) | `ask` / `deny`, voir plus bas |
+| Garde-fou Git | `hooks/git-guard.py`, hook `PreToolUse` (Bash et PowerShell) | `ask` / `deny`, voir plus bas |
 | Suivi | `scripts/task-state.py` | `read`, `patch`, `update`, `show`, `observe` |
 | Commande | `commands/task-status.md` | `/task-status` (ou `/orchestration:task-status`) |
 | Observation | hooks `SubagentStart` / `SubagentStop` | Événements de l'hôte notés à part, dans `.claude/state/observed.jsonl` |
@@ -54,12 +54,12 @@ Les scripts sont en Python 3.8+ (bibliothèque standard seulement), lancés par 
 
 ## Garde-fou Git
 
-Le hook analyse toute la commande : enchaînements `;`, `&&`, `||`, `|`, `&`, retours à la ligne, `$(…)`, `bash -c "…"`, variables et `sudo` en tête, options globales `-C`, `-c`, `--git-dir`…
+Le hook analyse toute la commande : enchaînements `;`, `&&`, `||`, `|`, `&`, retours à la ligne, `$(…)`, `bash -c "…"`, variables et `sudo` en tête, options globales `-C`, `-c`, `--git-dir`… Pour l'outil PowerShell, il suit aussi l'opérateur d'appel `&`, `git.exe` et son chemin complet (casse ignorée), les chaînes `'…'` et `"…"` (guillemets typographiques compris), le backtick et la continuation de ligne, les here-strings `@'…'@` et `@"…"@` (seuls les `$(…)` de la seconde sont analysés), les groupements `(…)`, `$(…)`, `@(…)`, `{…}`, `@{…}` (un groupement qui ne contient que des chaînes littérales vaut ces chaînes : `iex ('git push …')`), les affectations (`$r = git …`), les virgules (`main,dev`), les commentaires `#` et `<# … #>`, les redirections (`2>&1`, `*> $null`), et les programmes qui lancent du code : `cmd /c`, `bash -c`, `pwsh` ou `powershell` (`-Command`, `-EncodedCommand`), `Invoke-Expression`, `Start-Process`.
 
 | Décision | Commandes |
 |---|---|
 | `deny` | push forcé (`--force`, `-f`, `--force-with-lease`, `+refspec`, `--mirror`), push groupé (`--all`), push vers `main`, `master`, `develop`, `release/*`, `support/*` — y compris `HEAD:main`, `--delete main`, et un push implicite depuis une de ces branches |
-| `ask` | commit, push, reset, rebase, merge, pull, cherry-pick, revert, checkout, switch, restore, clean, add, rm, mv, stash (hors `list`/`show`), création ou suppression de tag ou de branche, `config` et `remote` en écriture |
+| `ask` | commit, push, reset, rebase, merge, pull, cherry-pick, revert, checkout, switch, restore, clean, add, rm, mv, stash (hors `list`/`show`), création ou suppression de tag ou de branche, `config` et `remote` en écriture ; pour l'outil PowerShell, une commande trop imbriquée pour être analysée (au-delà de 100 groupements imbriqués, la partie trop profonde n'est pas analysée ; un refus trouvé ailleurs l'emporte) |
 | aucune | tout le reste (`status`, `log`, `diff`, `fetch`, `show`…), entrée invalide, erreur interne |
 
 Le hook ne renvoie jamais `allow` : il ne contourne pas les permissions. Sans Python, il ne décide rien (jamais de blocage involontaire). Les alias Git (`git co`) ne sont pas résolus.
@@ -95,6 +95,19 @@ Avec le plugin [`suivi-demande`](../suivi-demande/README.md), l'orchestrateur re
 - Plan, validation et parallélisme reposent sur les consignes données au modèle : seuls le garde-fou Git et les contrôles du script de suivi sont imposés par du code.
 - Une session cloud sans personne pour répondre s'arrête aux `ask` du garde-fou et à la validation du plan : c'est voulu.
 - Les sous-agents de plugin ignorent `hooks`, `mcpServers` et `permissionMode` de leur frontmatter : les garde-fous sont au niveau du plugin.
+- Garde-fou Git, ce qu'il ne voit pas :
+  - l'outil Terminal de l'application : seuls les outils Bash et PowerShell de Claude Code passent par le hook ;
+  - une commande ou des arguments venus d'une variable, de `@args` ou d'un calcul : `& $git push`, `git $cmd`, `Invoke-Expression $var`, ou le texte passé à `Invoke-Expression` par le pipeline ;
+  - les alias et fonctions du profil PowerShell ;
+  - les scripts lancés : `pwsh -File x.ps1`, `. .\x.ps1` ;
+  - un `-EncodedCommand` illisible (base64 ou UTF-16LE invalide) ;
+  - un paramètre de `Start-Process` abrégé (`-Arg`, `-Wor`…) placé avant le programme ou ses arguments : non reconnu, sa valeur est prise pour eux (`Start-Process -Arg 'push --force' git`, `Start-Process git -Wor C:\x 'push --force'`) ; juste après le programme, `-Arg 'push --force'` est vu, sa valeur étant lue comme les arguments ;
+  - d'autres lanceurs que ceux cités plus haut (`wsl git …`), et, depuis l'outil Bash, `pwsh -c …` ou `cmd /c …` : l'analyse POSIX ne les ouvre pas ;
+  - un changement de dossier (`cd`, `Set-Location`) : le push implicite est jugé sur la branche du dossier où la commande démarre.
+- Garde-fou Git, prudence :
+  - une branche calculée (`git push origin $(…)`, `$branche`) est supposée non protégée : demande, pas refus ;
+  - refus possibles à tort : le texte des commentaires est analysé, une chaîne non fermée est lue comme du code, ce qui suit `--%` est découpé, un bloc `{ }` est analysé même s'il n'est jamais exécuté (`function f { … }`, `if ($false) { … }`), une here-string se ferme dès un `'@` précédé d'espaces, un backtick suivi de CRLF est lu des deux façons (PowerShell 5.1 finit l'instruction, PowerShell 7 peut continuer la ligne) et la décision la plus sévère l'emporte ;
+  - heredocs de Bash : leur contenu est analysé comme des commandes ; une ligne du texte qui commence par une écriture Git (`git push --force`…) est demandée ou refusée à tort.
 
 ## Contrôler
 

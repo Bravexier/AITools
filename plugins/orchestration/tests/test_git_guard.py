@@ -1,10 +1,12 @@
 """Cas du hook git-guard : python3 -m unittest discover -s plugins/orchestration/tests"""
 
+import base64
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ICI = os.path.dirname(os.path.abspath(__file__))
@@ -38,9 +40,9 @@ def lancer(entree: str):
     return code, json.loads(texte)["hookSpecificOutput"]["permissionDecision"]
 
 
-def evenement(commande, cwd=""):
+def evenement(commande, cwd="", tool_name="Bash"):
     # Comme Claude Code : les caractères non ASCII arrivent tels quels, pas en \uXXXX.
-    return json.dumps({"tool_name": "Bash", "tool_input": {"command": commande}, "cwd": cwd}, ensure_ascii=False)
+    return json.dumps({"tool_name": tool_name, "tool_input": {"command": commande}, "cwd": cwd}, ensure_ascii=False)
 
 
 class DepotTemporaire:
@@ -162,6 +164,263 @@ class Analyse(unittest.TestCase):
     def test_guillemets_non_fermes(self):
         self.assertEqual(self.d('git commit -m "x'), "ask")
         self.assertEqual(self.d("git status '"), None)
+
+
+# --- Outil PowerShell ---------------------------------------------------------
+
+def b64(s):
+    """Valeur de -EncodedCommand : base64 de l'UTF-16LE."""
+    return base64.b64encode(s.encode("utf-16-le")).decode("ascii")
+
+
+SEPARATEURS = [
+    ("git status; git push --force origin x", "deny"),
+    ("git log --oneline | Select-Object -First 3", None),
+    ("git status\ngit commit -m x", "ask"),
+    ("git fetch && git push origin main", "deny"),
+    ("git status || git push --force", "deny"),
+    ("git push --force origin x &", "deny"),
+    ("git push `\n  --force origin x", "deny"),                     # continuation
+    ("git add .; if ($?) { git push origin main }", "deny"),
+    ("git push --% --force origin x", "deny"),
+    ("git log --% --format=%H", None),
+]
+APPELS = [
+    ("& git push --force", "deny"),
+    ("& 'C:\\Program Files\\Git\\cmd\\git.exe' push --force", "deny"),
+    ('& "C:\\Program Files\\Git\\cmd\\git.exe" commit -m x', "ask"),
+    ("C:\\Git\\cmd\\git.exe push origin main", "deny"),
+    ("GIT.EXE push --force", "deny"),
+    ("Git commit -m x", "ask"),
+    ("git -C C:\\x\\depot push origin main", "deny"),
+]
+GUILLEMETS = [
+    ("git commit -m 'C''est fait ; git push --force'", "ask"),
+    ('git commit -m "a `" ; git push --force"', "ask"),
+    ('git commit -m "a "" ; git push --force"', "ask"),
+    ('git commit -m "ne pas faire git push --force, c\'est interdit"', "ask"),
+    ('git commit -m "x" ; git push --force', "deny"),
+    ('git commit -m "$(git push --force)"', "deny"),
+    ('git commit -m "`$(git push --force)"', "ask"),
+    ("git commit -m 'pas $(git push --force)'", "ask"),
+    ("Write-Host a`; git push --force", None),
+    ("Write-Host `' ; git push --force", "deny"),
+    ('git commit -m "x', "ask"),                                       # non fermée
+    ("Write-Host 'a ; git push --force", "deny"),                      # non fermée : prudence
+]
+HERE_STRINGS = [
+    ("git commit -m @'\nCorrige l'état ; git push --force origin main\n'@", "ask"),
+    ("git commit -m @'\n$(git push --force)\n'@", "ask"),
+    ('git commit -m @"\nTitre\ngit push --force\n"@', "ask"),
+    ('git commit -m @"\n$(git push --force)\n"@', "deny"),
+    ("$m = @'\nx ; git push --force\n'@\ngit commit -m $m", "ask"),
+    ("git commit -m @'\nTitre\n  '@\ngit push --force", "deny"),      # fermeture tolérée : prudence
+]
+GROUPES = [
+    ("$(git push --force)", "deny"),
+    ("@(git push origin main)", "deny"),
+    ("(git push --force)", "deny"),
+    ("[void](git push origin main)", "deny"),
+    ("Invoke-Command { git push --force }", "deny"),
+    ("if ($true) { git commit -m x }", "ask"),
+    ("1..3 | ForEach-Object { git push origin main }", "deny"),
+    ("if (git diff --quiet) { 'propre' } else { git stash }", "ask"),
+    ("git push origin $(git branch --show-current) --force", "deny"),
+    ("git push origin +$(git branch --show-current)", "deny"),
+    ("git push -u origin (git branch --show-current)", "ask"),         # branche calculée : inconnue
+    ("git push origin feature/x,main", "deny"),                        # virgule
+]
+AFFECTATIONS = [
+    ("$r = git push --force", "deny"),
+    ("$null = git commit -m x", "ask"),
+    ("$r=git push --force", "deny"),
+]
+COMMENTAIRES = [
+    ("# Pousser l'état\ngit push --force", "deny"),
+    ("# l'état\ngit push --force\n# c'est tout", "deny"),
+    ("<# l'état #> git push --force", "deny"),
+    ("git status # c'est propre", None),
+    ("git status # git push --force", "deny"),                         # prudence : commentaire analysé
+]
+IMBRIQUEES = [
+    ('cmd /c "git push --force"', "deny"),
+    ('cmd.exe /C "cd C:\\x && C:\\Git\\cmd\\git.exe push origin main"', "deny"),
+    ("cmd /c echo git push --force", None),
+    ('bash -c "git push --force"', "deny"),
+    ("& 'C:\\Program Files\\Git\\bin\\bash.exe' -c 'git push origin main'", "deny"),
+    ('pwsh -NoProfile -Command "git push --force"', "deny"),
+    ('powershell.exe -c "Set-Location C:\\x; git commit -m x"', "ask"),
+    ("powershell -NoProfile -EncodedCommand " + b64("git push origin main"), "deny"),
+    ("pwsh -enc " + b64("git status"), None),
+    ('pwsh -c "Write-Output \'git push --force\'"', None),
+    ('Invoke-Expression "git push --force"', "deny"),
+    ("iex 'git commit -m x'", "ask"),
+    ("Invoke-Expression -Command 'git status'", None),
+    ("Start-Process git -ArgumentList 'push','--force' -NoNewWindow -Wait", "deny"),
+    ('Start-Process -FilePath \'C:\\Program Files\\Git\\cmd\\git.exe\' -ArgumentList "push origin main"', "deny"),
+    ("Start-Process git 'commit -m x'", "ask"),
+    ("Start-Process git -ArgumentList '-C','x','status'", None),
+]
+LECTURES = [
+    ("git status", None), ("git log --oneline", None),
+    ('Write-Output "git push --force"', None), ("Write-Host 'git push --force'", None),
+    ("echo git push --force", None), ("git log --oneline | Select-String 'push --force'", None),
+]
+COLLES = [  # `(` ou `{` collé à la fin d'un mot : un argument à part, comme dans PowerShell
+    ("git push origin main(1)", "deny"),
+    ("git push --force(1) origin x", "deny"),
+    ("git push origin main{x}", "deny"),
+    ("git push origin main(1)(2)", "deny"),
+]
+LITTERAUX = [  # groupement qui ne contient que des chaînes littérales : il vaut ces chaînes
+    ("iex ('git push origin main')", "deny"),
+    ('Invoke-Expression ("git push --force")', "deny"),
+    ("git push origin ('main')", "deny"),
+    ("Start-Process git -ArgumentList @('push','--force')", "deny"),
+    ('git push origin ("$b")', "ask"),
+]
+CRLF = [  # backtick puis CRLF : PowerShell 5.1 coupe l'instruction, PowerShell 7 peut continuer la ligne
+    ("echo a`\r\ngit push origin main", "deny"),
+    ("git push`\r\n--force origin x", "deny"),
+]
+
+
+class PowerShell(unittest.TestCase):
+    """Découpage PowerShell et programmes reconnus : decider(commande, cwd, shell="powershell")."""
+
+    def d(self, commande, cwd=""):
+        decision = git_guard.decider(commande, cwd, shell="powershell")
+        return decision[0] if decision else None
+
+    def verifier(self, cas):
+        for commande, attendu in cas:
+            with self.subTest(commande=commande):
+                self.assertEqual(self.d(commande), attendu)
+
+    def test_separateurs(self):
+        self.verifier(SEPARATEURS)
+
+    def test_appels(self):
+        self.verifier(APPELS)
+
+    def test_guillemets(self):
+        self.verifier(GUILLEMETS)
+
+    def test_here_strings(self):
+        self.verifier(HERE_STRINGS)
+
+    def test_groupes(self):
+        self.verifier(GROUPES)
+
+    def test_affectations(self):
+        self.verifier(AFFECTATIONS)
+
+    def test_commentaires(self):
+        self.verifier(COMMENTAIRES)
+
+    def test_imbriquees(self):
+        self.verifier(IMBRIQUEES)
+
+    def test_lectures(self):
+        self.verifier(LECTURES)
+
+    def test_guillemets_typographiques(self):
+        # Le vrai analyseur de PowerShell les traite comme ' et " (vérifié avec Parser::ParseInput).
+        self.verifier([("Write-Host 'a\u2019 ; git push --force ; \u2019b'", "deny"),
+                       ("git commit -m \u201ca ; git push --force\u201d", "ask")])
+
+    def test_redirections(self):
+        # Une redirection n'est pas un argument de git : elle ne change pas la décision.
+        with DepotTemporaire("main") as depot:
+            self.assertEqual(self.d("git push", depot), "deny")
+            self.assertEqual(self.d("git push 2>&1", depot), "deny")
+            self.assertEqual(git_guard.decider("git push origin *> $null", depot, shell="powershell"),
+                             git_guard.decider("git push origin", depot))
+            self.assertEqual(self.d("git push --force origin x 2>&1 | Out-String", depot), "deny")
+
+    def test_segments(self):
+        # Même forme que segments() : commandes simples, mots sans guillemets, échappements appliqués.
+        s = git_guard.segments_powershell
+        self.assertEqual(s("git status; git push origin feature/x,main"),
+                         [["git", "status"], ["git", "push", "origin", "feature/x", "main"]])
+        self.assertEqual(s("git commit -m 'C''est' \"a `\" b\" a`;b"),
+                         [["git", "commit", "-m", "C'est", 'a " b', "a;b"]])
+        self.assertEqual(s("git push `\n  --force origin x 2>&1 *> $null"), [["git", "push", "--force", "origin", "x"]])
+        self.assertEqual(s("$r=git push"), [["$r", "=", "git", "push"], ["git", "push"]])
+        # Comme le vrai analyseur : backtick dans un mot, here-string aux fins de ligne CRLF.
+        self.assertEqual(s("git commit -m a` b @'\r\nTitre\r\n'@"), [["git", "commit", "-m", "a b", "Titre"]])
+
+    def test_cmd_recoit_les_guillemets_de_powershell(self):
+        # PowerShell entoure de guillemets un argument qui contient un blanc : cmd ne le découpe pas.
+        self.verifier([('cmd /c echo "a & git push --force"', None), ('cmd /c "echo a & git push --force"', "deny")])
+
+    def test_guillemet_final_non_ferme(self):
+        # Le guillemet seul ne laisse pas de mot vide : le push reste implicite, refusé depuis main.
+        with DepotTemporaire("main") as depot:
+            self.assertEqual(self.d('git push origin "', depot), "deny")
+
+    def test_groupement_colle_a_un_mot(self):
+        # Comme le vrai analyseur : `(` ou `{` finit le mot ; `$(` y reste ; `main@(1)` donne `main@` puis `(1)`.
+        self.verifier(COLLES)
+        calcul = git_guard.VALEUR_CALCULEE
+        self.assertEqual(git_guard.segments_powershell("x main@(1) +$(a)"),
+                         [["1"], ["a"], ["x", "main@", calcul, "+" + calcul]])
+
+    def test_groupement_de_chaines_litterales(self):
+        self.verifier(LITTERAUX)
+        self.assertEqual(git_guard.segments_powershell("x ('a', \"b\") @(@'\nc\n'@) $('d')e y$('f','g')"),
+                         [["x", "a", "b", "c", "d", "e", "yf g"]])
+
+    def test_imbrication_profonde(self):
+        # Au-delà de PROFONDEUR_MAX, la partie trop profonde n'est pas analysée : elle demande confirmation,
+        # sans exception ; la décision la plus sévère l'emporte.
+        trop_profond = ("ask", "commande trop imbriquée pour être analysée")
+        for ouvrant in ("$(", "(", "{"):
+            with self.subTest(ouvrant=ouvrant):
+                debut = time.perf_counter()
+                self.assertEqual(git_guard.decider(ouvrant * 600, "", shell="powershell"), trop_profond)
+                self.assertEqual(self.d("git push --force; " + ouvrant * 600), "deny")
+                self.assertLess(time.perf_counter() - debut, 1)
+        self.assertEqual(self.d("(" * 600 + ")" * 600 + "; git push --force"), "deny")
+        self.assertEqual(self.d("(" * 600 + "git status" + ")" * 600), "ask")
+        self.assertEqual(self.d("(" * 50 + "git status" + ")" * 50), None)
+
+    def test_backtick_crlf_deux_lectures(self):
+        self.verifier(CRLF)
+
+    def test_here_strings_non_fermees_en_temps_lineaire(self):
+        for entete in ("@'\n", '@"\n'):
+            with self.subTest(entete=entete):
+                debut = time.perf_counter()
+                self.assertEqual(self.d(entete * 10000 + "git push --force"), "deny")
+                self.assertLess(time.perf_counter() - debut, 1)
+
+
+class ProcessusPowerShell(unittest.TestCase):
+    """L'outil PowerShell de Claude Code, par le vrai processus du hook."""
+
+    def test_decisions(self):
+        for commande, attendu in [("git push --force", "deny"),
+                                  ("git commit -m @'\nTitre : git push --force\n'@", "ask"),
+                                  ("git status", None)]:
+            with self.subTest(commande=commande):
+                self.assertEqual(lancer(evenement(commande, tool_name="PowerShell")), (0, attendu))
+
+    def test_entree_invalide(self):
+        self.assertEqual(lancer(json.dumps({"tool_name": "PowerShell", "tool_input": {"command": 42}})), (0, None))
+
+    def test_autre_outil_ignore(self):
+        self.assertEqual(lancer(evenement("git push --force", tool_name="Terminal")), (0, None))
+
+    def test_push_implicite_depuis_un_dossier_accentue(self):
+        with DepotTemporaire("main", prefixe="dépôt-") as depot:
+            self.assertEqual(lancer(evenement("git push", depot, tool_name="PowerShell")), (0, "deny"))
+
+    def test_commande_trop_imbriquee(self):
+        code, texte = lancer_brut(evenement("$(" * 600, tool_name="PowerShell"))
+        sortie = json.loads(texte or "{}").get("hookSpecificOutput", {})
+        self.assertEqual((code, sortie.get("permissionDecision"), sortie.get("permissionDecisionReason")),
+                         (0, "ask", "git-guard : commande trop imbriquée pour être analysée."))
 
 
 if __name__ == "__main__":
