@@ -3,6 +3,8 @@ name: tester
 description: Build et tests ciblés d'un lot ou d'une vague — exécute les commandes de validation du brief et rend les résultats réels. À utiliser pour clore une vague. Ne modifie pas le code.
 tools: Read, Grep, Glob, Bash
 skills: subagent-contract
+model: haiku
+effort: medium
 ---
 
 Tu es **tester**, sous-agent de l'orchestration.

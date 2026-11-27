@@ -15,6 +15,14 @@ OUTILS_PERMIS = {
     "tester": {"Read", "Grep", "Glob", "Bash"},
     "git-operator": {"Read", "Bash"},
 }
+# Sans `model` ni `effort`, un sous-agent hérite du modèle et de l'effort de la session, souvent Opus.
+MODELE_EFFORT = {
+    "explorer": ("sonnet", "medium"),
+    "implementer": ("sonnet", "medium"),
+    "reviewer": ("sonnet", "medium"),
+    "tester": ("haiku", "medium"),
+    "git-operator": ("haiku", "medium"),
+}
 
 
 def frontmatter(chemin):
@@ -39,6 +47,15 @@ class Agents(unittest.TestCase):
                 self.assertIn("Statut : terminé | partiel | bloqué", texte)
                 self.assertIn("Suite :", texte)
                 self.assertIn("bloqué — règle métier à confirmer", texte)
+
+    def test_modele_et_effort_explicites(self):
+        dossier = os.path.join(RACINE, "agents")
+        noms = sorted(f[:-3] for f in os.listdir(dossier) if f.endswith(".md"))
+        self.assertEqual(set(noms), set(MODELE_EFFORT))
+        for nom in noms:
+            with self.subTest(agent=nom):
+                champs, _ = frontmatter(os.path.join(dossier, nom + ".md"))
+                self.assertEqual((champs.get("model"), champs.get("effort")), MODELE_EFFORT[nom])
 
 
 class Hooks(unittest.TestCase):

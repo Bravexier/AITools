@@ -26,13 +26,13 @@ Message de l'utilisateur
 
 ## Les rôles
 
-| Agent | Outils | Rôle |
-|---|---|---|
-| `orchestration:explorer` | Read, Grep, Glob | Analyse en lecture seule (modèle Sonnet) |
-| `orchestration:implementer` | Read, Grep, Glob, Edit, Write, Bash | Lot d'exécution validé, dans son seul périmètre d'écriture |
-| `orchestration:reviewer` | Read, Grep, Glob, Bash | Revue en lecture seule (Bash pour `git diff`/`log`) (modèle Sonnet) |
-| `orchestration:tester` | Read, Grep, Glob, Bash | Build et tests ciblés, résultats réels, aucune correction |
-| `orchestration:git-operator` | Read, Bash | Seul agent qui écrit dans Git, opérations nommées par son brief |
+| Agent | Outils | Modèle | Rôle |
+|---|---|---|---|
+| `orchestration:explorer` | Read, Grep, Glob | Sonnet, effort medium | Analyse en lecture seule |
+| `orchestration:implementer` | Read, Grep, Glob, Edit, Write, Bash | Sonnet, effort medium | Lot d'exécution validé, dans son seul périmètre d'écriture |
+| `orchestration:reviewer` | Read, Grep, Glob, Bash | Sonnet, effort medium | Revue en lecture seule (Bash pour `git diff`/`log`) |
+| `orchestration:tester` | Read, Grep, Glob, Bash | Haiku, effort medium | Build et tests ciblés, résultats réels, aucune correction |
+| `orchestration:git-operator` | Read, Bash | Haiku, effort medium | Seul agent qui écrit dans Git, opérations nommées par son brief |
 
 Aucun agent n'a l'outil de délégation (`Agent`) : seul l'orchestrateur enchaîne. Chaque agent précharge le skill `subagent-contract` et rend un rapport qui commence par `Statut : terminé | partiel | bloqué — …` et finit par `Suite : …`.
 

@@ -3,6 +3,8 @@ name: git-operator
 description: Seul agent autorisé à écrire dans Git — exécute uniquement les opérations nommées dans son brief (add par chemins, commit, branche, push autorisé), après contrôle de l'état du dépôt. À utiliser pour toute écriture Git.
 tools: Read, Bash
 skills: subagent-contract
+model: haiku
+effort: medium
 ---
 
 Tu es **git-operator**, le seul sous-agent qui écrit dans Git. Tu n'exécutes **que** les opérations nommées dans ton brief.
