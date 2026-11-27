@@ -59,8 +59,8 @@ Le hook analyse toute la commande : enchaînements `;`, `&&`, `||`, `|`, `&`, re
 | Décision | Commandes |
 |---|---|
 | `deny` | push forcé (`--force`, `-f`, `--force-with-lease`, `+refspec`, `--mirror`), push groupé (`--all`), push vers `main`, `master`, `develop`, `release/*`, `support/*` — y compris `HEAD:main`, `--delete main`, et un push implicite depuis une de ces branches |
-| `ask` | commit, push, reset, rebase, merge, pull, cherry-pick, revert, checkout, switch, restore, clean, add, rm, mv, stash (hors `list`/`show`), création ou suppression de tag ou de branche, `config` et `remote` en écriture ; pour l'outil PowerShell, une commande trop imbriquée pour être analysée (au-delà de 100 groupements imbriqués, la partie trop profonde n'est pas analysée ; un refus trouvé ailleurs l'emporte) |
-| aucune | tout le reste (`status`, `log`, `diff`, `fetch`, `show`…), entrée invalide, erreur interne |
+| `ask` | ce qui efface du travail non enregistré ou une branche, sans retour simple : `reset --hard`, `clean` (hors `--dry-run`), `checkout` et `switch` forcés (`--force`, `--discard-changes`), `checkout` ou `restore` de tout l'arbre (`.`, `:/`, `*`), `stash drop`, `stash clear`, `branch -D` ; pour l'outil PowerShell, une commande trop imbriquée pour être analysée (au-delà de 100 groupements imbriqués, la partie trop profonde n'est pas analysée ; un refus trouvé ailleurs l'emporte) |
+| aucune | tout le reste : les lectures (`status`, `log`, `diff`, `fetch`, `show`…) et les écritures courantes (add, commit, rebase, merge, pull, checkout d'une branche ou de fichiers nommés, push vers une branche non protégée…), qu'une demande par commande arrêtait sans rien protéger ; entrée invalide, erreur interne |
 
 Le hook ne renvoie jamais `allow` : il ne contourne pas les permissions. Sans Python, il ne décide rien (jamais de blocage involontaire). Les alias Git (`git co`) ne sont pas résolus.
 
@@ -105,9 +105,9 @@ Avec le plugin [`suivi-demande`](../suivi-demande/README.md), l'orchestrateur re
   - d'autres lanceurs que ceux cités plus haut (`wsl git …`), et, depuis l'outil Bash, `pwsh -c …` ou `cmd /c …` : l'analyse POSIX ne les ouvre pas ;
   - un changement de dossier (`cd`, `Set-Location`) : le push implicite est jugé sur la branche du dossier où la commande démarre.
 - Garde-fou Git, prudence :
-  - une branche calculée (`git push origin $(…)`, `$branche`) est supposée non protégée : demande, pas refus ;
+  - une branche calculée (`git push origin $(…)`, `$branche`) est supposée non protégée : pas de refus ;
   - refus possibles à tort : le texte des commentaires est analysé, une chaîne non fermée est lue comme du code, ce qui suit `--%` est découpé, un bloc `{ }` est analysé même s'il n'est jamais exécuté (`function f { … }`, `if ($false) { … }`), une here-string se ferme dès un `'@` précédé d'espaces, un backtick suivi de CRLF est lu des deux façons (PowerShell 5.1 finit l'instruction, PowerShell 7 peut continuer la ligne) et la décision la plus sévère l'emporte ;
-  - heredocs de Bash : leur contenu est analysé comme des commandes ; une ligne du texte qui commence par une écriture Git (`git push --force`…) est demandée ou refusée à tort.
+  - heredocs de Bash : leur contenu est analysé comme des commandes ; une ligne du texte qui commence par une commande Git surveillée (`git push --force`, `git reset --hard`…) est refusée ou demandée à tort.
 
 ## Contrôler
 
