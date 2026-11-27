@@ -23,6 +23,11 @@ redirections, et les programmes qui lancent du code (`cmd /c`, `bash -c`,
   checkout d'une branche ou de fichiers nommés, push vers une branche non
   protégée…) : demander à chacune arrêtait les sessions sans rien protéger.
 
+Mode strict, pour un dépôt partagé : avec GIT_GUARD_STRICT=1 (ou true, yes, oui)
+dans l'environnement, toute écriture Git est demandée (commit, push, rebase,
+merge, pull, checkout, switch, add, rm, mv, stash hors list/show, création ou
+suppression de tag ou de branche, config et remote en écriture).
+
 Le hook ne renvoie jamais `allow`. Une entrée invalide ou une erreur interne ne
 produit aucune décision : jamais de blocage involontaire.
 """
@@ -51,6 +56,9 @@ GLOBALES_AVEC_VALEUR = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "
 
 # Chemins qui désignent tout l'arbre de travail : les restaurer efface toutes les modifications.
 TOUT_L_ARBRE = {".", "./", ".\\", ":/", "*"}
+# Mode strict : sous-commandes dont tout appel est une écriture.
+ECRITURES_SIMPLES = {"commit", "reset", "rebase", "merge", "pull", "cherry-pick", "revert", "checkout", "switch",
+                     "restore", "clean", "add", "rm", "mv"}
 
 RANG = {None: 0, "ask": 1, "deny": 2}
 
@@ -778,22 +786,99 @@ DESTRUCTRICES = {
 }
 
 
-def analyser(globales: List[str], args: List[str], cwd: str) -> Decision:
+# --- Mode strict : toute écriture Git est demandée ---------------------------
+
+def mode_strict() -> bool:
+    return os.environ.get("GIT_GUARD_STRICT", "").strip().lower() in {"1", "true", "yes", "oui"}
+
+
+def ecriture_tag(args: List[str]) -> Decision:
+    if a_option(args, ["--delete", "--annotate", "--sign", "--local-user", "--force", "--message", "--file"], "dasufmF"):
+        return "ask", "création ou suppression de tag"
+    lecture = a_option(args, ["--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--verify"], "lnv")
+    if positionnels(args, ["--sort", "--format", "--contains", "--points-at", "--merged", "--no-merged", "--color", "--column"]) and not lecture:
+        return "ask", "création de tag"
+    return None
+
+
+def ecriture_branche(args: List[str]) -> Decision:
+    if a_option(
+        args,
+        ["--delete", "--move", "--copy", "--force", "--set-upstream-to", "--unset-upstream", "--edit-description", "--track", "--no-track"],
+        "dDmMcCfut",
+    ):
+        return "ask", "création, déplacement ou suppression de branche"
+    lecture = a_option(
+        args,
+        ["--list", "--all", "--remotes", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--show-current", "--verbose"],
+        "larv",
+    )
+    if positionnels(args, ["--sort", "--format", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--color", "--column"]) and not lecture:
+        return "ask", "création de branche"
+    return None
+
+
+def ecriture_config(args: List[str]) -> Decision:
+    if args and args[0] in {"set", "unset", "rename-section", "remove-section", "edit"}:
+        return "ask", "écriture de configuration Git"
+    if args and args[0] in {"get", "list"}:
+        return None
+    if a_option(args, ["--unset", "--unset-all", "--add", "--replace-all", "--rename-section", "--remove-section", "--edit"], "e"):
+        return "ask", "écriture de configuration Git"
+    if a_option(args, ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "--get-color", "--get-colorbool"], "l"):
+        return None
+    if len(positionnels(args, ["--file", "-f", "--blob", "--type", "--default", "--comment"])) >= 2:
+        return "ask", "écriture de configuration Git"
+    return None
+
+
+def ecriture_remote(args: List[str]) -> Decision:
+    pos = positionnels(args)
+    if pos and pos[0] in {"add", "remove", "rm", "rename", "set-url", "set-head", "set-branches", "prune"}:
+        return "ask", f"git remote {pos[0]} modifie la configuration des dépôts distants"
+    return None
+
+
+def analyser_ecriture(sous: str, reste: List[str]) -> Decision:
+    """Mode strict : la décision pour une écriture que le mode courant laisse passer."""
+    if sous in ECRITURES_SIMPLES:
+        return "ask", f"git {sous} écrit dans le dépôt"
+    if sous == "stash":
+        return None if reste and reste[0] in {"list", "show"} else ("ask", "git stash modifie l'arbre de travail")
+    if sous == "tag":
+        return ecriture_tag(reste)
+    if sous == "branch":
+        return ecriture_branche(reste)
+    if sous == "config":
+        return ecriture_config(reste)
+    if sous == "remote":
+        return ecriture_remote(reste)
+    return None
+
+
+def analyser(globales: List[str], args: List[str], cwd: str, strict: bool = False) -> Decision:
     if not args:
         return None
     sous, reste = args[0], args[1:]
     if sous == "push":
-        return analyser_push(reste, globales, cwd)
-    if sous in DESTRUCTRICES:
-        return DESTRUCTRICES[sous](reste)
-    return None
+        decision = analyser_push(reste, globales, cwd)
+        if decision is None and strict:
+            return "ask", "push : à autoriser pour ce push précis (dépôt, branche, commits)"
+        return decision
+    decision = DESTRUCTRICES[sous](reste) if sous in DESTRUCTRICES else None
+    if decision is None and strict:
+        decision = analyser_ecriture(sous, reste)
+    return decision
 
 
-def decider(commande: str, cwd: str = "", shell: str = "posix") -> Decision:
+def decider(commande: str, cwd: str = "", shell: str = "posix", strict: Optional[bool] = None) -> Decision:
+    """`strict` : None lit GIT_GUARD_STRICT dans l'environnement."""
+    if strict is None:
+        strict = mode_strict()
     retenue: Decision = None
     for globales, args in commandes_git(commande, shell=shell):
         # Partie trop profonde : demande de confirmation. La décision la plus sévère l'emporte.
-        decision = DECISION_TROP_PROFOND if globales == [PARTIE_NON_ANALYSEE] else analyser(globales, args, cwd)
+        decision = DECISION_TROP_PROFOND if globales == [PARTIE_NON_ANALYSEE] else analyser(globales, args, cwd, strict)
         if decision and RANG[decision[0]] > RANG[retenue[0] if retenue else None]:
             retenue = decision
     return retenue

@@ -62,6 +62,8 @@ Le hook analyse toute la commande : enchaînements `;`, `&&`, `||`, `|`, `&`, re
 | `ask` | ce qui efface du travail non enregistré ou une branche, sans retour simple : `reset --hard`, `clean` (hors `--dry-run`), `checkout` et `switch` forcés (`--force`, `--discard-changes`), `checkout` ou `restore` de tout l'arbre (`.`, `:/`, `*`), `stash drop`, `stash clear`, `branch -D` ; pour l'outil PowerShell, une commande trop imbriquée pour être analysée (au-delà de 100 groupements imbriqués, la partie trop profonde n'est pas analysée ; un refus trouvé ailleurs l'emporte) |
 | aucune | tout le reste : les lectures (`status`, `log`, `diff`, `fetch`, `show`…) et les écritures courantes (add, commit, rebase, merge, pull, checkout d'une branche ou de fichiers nommés, push vers une branche non protégée…), qu'une demande par commande arrêtait sans rien protéger ; entrée invalide, erreur interne |
 
+Mode strict, pour un dépôt partagé : `GIT_GUARD_STRICT=1` dans l'environnement (ou dans `env` d'un `.claude/settings.json` de projet) fait demander toute écriture Git : commit, push, rebase, merge, pull, checkout, switch, add, rm, mv, stash (hors `list`/`show`), création ou suppression de tag ou de branche, `config` et `remote` en écriture. Les refus ne changent pas.
+
 Le hook ne renvoie jamais `allow` : il ne contourne pas les permissions. Sans Python, il ne décide rien (jamais de blocage involontaire). Les alias Git (`git co`) ne sont pas résolus.
 
 ## Suivi de tâche
