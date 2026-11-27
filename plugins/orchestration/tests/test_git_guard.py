@@ -65,7 +65,7 @@ class CasDeLIssue(unittest.TestCase):
     """Les cas exigés par les critères d'acceptation, via le vrai processus."""
 
     def test_ask(self):
-        for commande in ['git commit -m "x"', "git push origin feature/x", "git reset --hard", "git -C x rebase main"]:
+        for commande in ["git reset --hard", "git -C x clean -fd", "git checkout -- .", "git branch -D x"]:
             with self.subTest(commande=commande):
                 self.assertEqual(lancer(evenement(commande)), (0, "ask"))
 
@@ -75,9 +75,17 @@ class CasDeLIssue(unittest.TestCase):
                 self.assertEqual(lancer(evenement(commande)), (0, "deny"))
 
     def test_aucune_decision(self):
-        for commande in ["git status", "git log --oneline", "git fetch origin", "ls -la", "echo git push --force"]:
+        for commande in ["git status", "git log --oneline", "git fetch origin", "ls -la", "echo git push --force",
+                         'git commit -m "x"', "git push origin feature/x", "git -C x rebase main"]:
             with self.subTest(commande=commande):
                 self.assertEqual(lancer(evenement(commande)), (0, None))
+
+    def test_rebase_puis_tests_sans_demande(self):
+        # La commande qui arrêtait une session : rebase sur la base, puis les tests du lot.
+        commande = ('cd /c/Git/Depot/.claude/worktrees/lot && git rebase origin/dev 2>&1 | tail -3'
+                    ' && git log --oneline -2 && cd client && node --test test/a.test.mjs test/b.test.mjs 2>&1'
+                    ' | grep -E "(tests|pass|fail|skipped) [0-9]+|✕" | head -20')
+        self.assertEqual(lancer(evenement(commande)), (0, None))
 
     def test_entree_invalide(self):
         for entree in ["", "pas du json", "[]", "null", json.dumps({"tool_name": "Bash"}),
@@ -109,18 +117,18 @@ class Analyse(unittest.TestCase):
         return decision[0] if decision else None
 
     def test_enchainements(self):
-        self.assertEqual(self.d("git status && git commit -m x"), "ask")
+        self.assertEqual(self.d("git status && git reset --hard"), "ask")
         self.assertEqual(self.d("git status; git push -f origin x"), "deny")
         self.assertEqual(self.d("git log | head\ngit push origin develop"), "deny")
         self.assertEqual(self.d("cd a || git push origin release/1.2"), "deny")
         self.assertEqual(self.d("git add a && git push --force origin x"), "deny")
         self.assertEqual(self.d('bash -c "git push origin main"'), "deny")
         self.assertEqual(self.d("echo $(git push origin master)"), "deny")
-        self.assertEqual(self.d("FOO=1 sudo git commit"), "ask")
-        self.assertEqual(self.d("/usr/bin/git commit"), "ask")
+        self.assertEqual(self.d("FOO=1 sudo git reset --hard"), "ask")
+        self.assertEqual(self.d("/usr/bin/git reset --hard"), "ask")
 
     def test_options_globales(self):
-        self.assertEqual(self.d("git -c user.name=x commit -m y"), "ask")
+        self.assertEqual(self.d("git -c user.name=x reset --hard"), "ask")
         self.assertEqual(self.d("git --no-pager -C sub log"), None)
         self.assertEqual(self.d("git --git-dir .git push origin support/2"), "deny")
 
@@ -132,23 +140,37 @@ class Analyse(unittest.TestCase):
         self.assertEqual(self.d("git push origin HEAD:refs/heads/main"), "deny")
         self.assertEqual(self.d("git push origin --delete main"), "deny")
         self.assertEqual(self.d("git push origin :master"), "deny")
-        self.assertEqual(self.d("git push -u origin feature/x"), "ask")
-        self.assertEqual(self.d("git push origin mainline"), "ask")
-        self.assertEqual(self.d('git commit -m "pas un push --force"'), "ask")
+        self.assertEqual(self.d("git push -u origin feature/x"), None)
+        self.assertEqual(self.d("git push origin mainline"), None)
+        self.assertEqual(self.d('git commit -m "pas un push --force"'), None)
 
     def test_push_implicite(self):
         with DepotTemporaire("main") as depot:
             self.assertEqual(self.d("git push", depot), "deny")
             self.assertEqual(self.d("git push origin HEAD", depot), "deny")
         with DepotTemporaire("feature/x") as depot:
-            self.assertEqual(self.d("git push", depot), "ask")
+            self.assertEqual(self.d("git push", depot), None)
 
-    def test_ecritures(self):
-        for commande in ["git merge x", "git pull", "git cherry-pick a", "git revert a", "git checkout x",
-                         "git switch -c y", "git restore f", "git clean -fd", "git add f", "git rm f", "git mv a b",
-                         "git stash", "git stash pop", "git tag v1", "git tag -d v1", "git branch nouvelle",
-                         "git branch -D x", "git config user.name x", "git config --unset a.b",
-                         "git config set a.b c", "git remote add o url", "git remote set-url o url"]:
+    def test_ecritures_courantes(self):
+        # Aucune demande : une fenêtre par commande arrêtait les sessions sans rien protéger.
+        for commande in ["git add f", "git commit -m x", "git commit --amend", "git rebase origin/dev",
+                         "git rebase --continue", "git merge x", "git pull", "git cherry-pick a", "git revert a",
+                         "git checkout x", "git checkout -b y", "git checkout --ours f", "git checkout -- f",
+                         "git switch -c y", "git restore f", "git restore --staged .", "git reset --soft HEAD~1",
+                         "git reset f", "git clean -nd", "git rm f", "git mv a b", "git stash", "git stash pop",
+                         "git tag v1", "git tag -d v1", "git branch nouvelle", "git branch -d x", "git branch -m y",
+                         "git config user.name x", "git config --unset a.b", "git config set a.b c",
+                         "git remote add o url", "git remote set-url o url"]:
+            with self.subTest(commande=commande):
+                self.assertEqual(self.d(commande), None)
+
+    def test_destructrices(self):
+        for commande in ["git reset --hard", "git reset -q --hard origin/dev", "git clean -fd", "git clean -fdx",
+                         "git checkout .", "git checkout -- .", "git checkout -q HEAD -- .", "git checkout -f x",
+                         "git checkout --force", "git switch -f x", "git switch --discard-changes x",
+                         "git restore .", "git restore --source HEAD~1 -- .", "git restore --staged --worktree .",
+                         "git restore -SW :/", "git stash drop", "git stash clear", "git branch -D x",
+                         "git branch -d -f x", "git branch --delete --force x"]:
             with self.subTest(commande=commande):
                 self.assertEqual(self.d(commande), "ask")
 
@@ -162,7 +184,7 @@ class Analyse(unittest.TestCase):
                 self.assertEqual(self.d(commande), None)
 
     def test_guillemets_non_fermes(self):
-        self.assertEqual(self.d('git commit -m "x'), "ask")
+        self.assertEqual(self.d('git clean -fd "x'), "ask")
         self.assertEqual(self.d("git status '"), None)
 
 
@@ -176,7 +198,7 @@ def b64(s):
 SEPARATEURS = [
     ("git status; git push --force origin x", "deny"),
     ("git log --oneline | Select-Object -First 3", None),
-    ("git status\ngit commit -m x", "ask"),
+    ("git status\ngit reset --hard", "ask"),
     ("git fetch && git push origin main", "deny"),
     ("git status || git push --force", "deny"),
     ("git push --force origin x &", "deny"),
@@ -188,32 +210,32 @@ SEPARATEURS = [
 APPELS = [
     ("& git push --force", "deny"),
     ("& 'C:\\Program Files\\Git\\cmd\\git.exe' push --force", "deny"),
-    ('& "C:\\Program Files\\Git\\cmd\\git.exe" commit -m x', "ask"),
+    ('& "C:\\Program Files\\Git\\cmd\\git.exe" reset --hard', "ask"),
     ("C:\\Git\\cmd\\git.exe push origin main", "deny"),
     ("GIT.EXE push --force", "deny"),
-    ("Git commit -m x", "ask"),
+    ("Git reset --hard", "ask"),
     ("git -C C:\\x\\depot push origin main", "deny"),
 ]
 GUILLEMETS = [
-    ("git commit -m 'C''est fait ; git push --force'", "ask"),
-    ('git commit -m "a `" ; git push --force"', "ask"),
-    ('git commit -m "a "" ; git push --force"', "ask"),
-    ('git commit -m "ne pas faire git push --force, c\'est interdit"', "ask"),
+    ("git commit -m 'C''est fait ; git push --force'", None),
+    ('git commit -m "a `" ; git push --force"', None),
+    ('git commit -m "a "" ; git push --force"', None),
+    ('git commit -m "ne pas faire git push --force, c\'est interdit"', None),
     ('git commit -m "x" ; git push --force', "deny"),
     ('git commit -m "$(git push --force)"', "deny"),
-    ('git commit -m "`$(git push --force)"', "ask"),
-    ("git commit -m 'pas $(git push --force)'", "ask"),
+    ('git commit -m "`$(git push --force)"', None),
+    ("git commit -m 'pas $(git push --force)'", None),
     ("Write-Host a`; git push --force", None),
     ("Write-Host `' ; git push --force", "deny"),
-    ('git commit -m "x', "ask"),                                       # non fermée
+    ('git reset --hard "x', "ask"),                                       # non fermée
     ("Write-Host 'a ; git push --force", "deny"),                      # non fermée : prudence
 ]
 HERE_STRINGS = [
-    ("git commit -m @'\nCorrige l'état ; git push --force origin main\n'@", "ask"),
-    ("git commit -m @'\n$(git push --force)\n'@", "ask"),
-    ('git commit -m @"\nTitre\ngit push --force\n"@', "ask"),
+    ("git commit -m @'\nCorrige l'état ; git push --force origin main\n'@", None),
+    ("git commit -m @'\n$(git push --force)\n'@", None),
+    ('git commit -m @"\nTitre\ngit push --force\n"@', None),
     ('git commit -m @"\n$(git push --force)\n"@', "deny"),
-    ("$m = @'\nx ; git push --force\n'@\ngit commit -m $m", "ask"),
+    ("$m = @'\nx ; git push --force\n'@\ngit commit -m $m", None),
     ("git commit -m @'\nTitre\n  '@\ngit push --force", "deny"),      # fermeture tolérée : prudence
 ]
 GROUPES = [
@@ -222,17 +244,17 @@ GROUPES = [
     ("(git push --force)", "deny"),
     ("[void](git push origin main)", "deny"),
     ("Invoke-Command { git push --force }", "deny"),
-    ("if ($true) { git commit -m x }", "ask"),
+    ("if ($true) { git reset --hard }", "ask"),
     ("1..3 | ForEach-Object { git push origin main }", "deny"),
-    ("if (git diff --quiet) { 'propre' } else { git stash }", "ask"),
+    ("if (git diff --quiet) { 'propre' } else { git stash clear }", "ask"),
     ("git push origin $(git branch --show-current) --force", "deny"),
     ("git push origin +$(git branch --show-current)", "deny"),
-    ("git push -u origin (git branch --show-current)", "ask"),         # branche calculée : inconnue
+    ("git push -u origin (git branch --show-current)", None),         # branche calculée : inconnue
     ("git push origin feature/x,main", "deny"),                        # virgule
 ]
 AFFECTATIONS = [
     ("$r = git push --force", "deny"),
-    ("$null = git commit -m x", "ask"),
+    ("$null = git reset --hard", "ask"),
     ("$r=git push --force", "deny"),
 ]
 COMMENTAIRES = [
@@ -249,16 +271,16 @@ IMBRIQUEES = [
     ('bash -c "git push --force"', "deny"),
     ("& 'C:\\Program Files\\Git\\bin\\bash.exe' -c 'git push origin main'", "deny"),
     ('pwsh -NoProfile -Command "git push --force"', "deny"),
-    ('powershell.exe -c "Set-Location C:\\x; git commit -m x"', "ask"),
+    ('powershell.exe -c "Set-Location C:\\x; git reset --hard"', "ask"),
     ("powershell -NoProfile -EncodedCommand " + b64("git push origin main"), "deny"),
     ("pwsh -enc " + b64("git status"), None),
     ('pwsh -c "Write-Output \'git push --force\'"', None),
     ('Invoke-Expression "git push --force"', "deny"),
-    ("iex 'git commit -m x'", "ask"),
+    ("iex 'git reset --hard'", "ask"),
     ("Invoke-Expression -Command 'git status'", None),
     ("Start-Process git -ArgumentList 'push','--force' -NoNewWindow -Wait", "deny"),
     ('Start-Process -FilePath \'C:\\Program Files\\Git\\cmd\\git.exe\' -ArgumentList "push origin main"', "deny"),
-    ("Start-Process git 'commit -m x'", "ask"),
+    ("Start-Process git 'reset --hard'", "ask"),
     ("Start-Process git -ArgumentList '-C','x','status'", None),
 ]
 LECTURES = [
@@ -277,7 +299,7 @@ LITTERAUX = [  # groupement qui ne contient que des chaînes littérales : il va
     ('Invoke-Expression ("git push --force")', "deny"),
     ("git push origin ('main')", "deny"),
     ("Start-Process git -ArgumentList @('push','--force')", "deny"),
-    ('git push origin ("$b")', "ask"),
+    ('git push origin ("$b")', None),
 ]
 CRLF = [  # backtick puis CRLF : PowerShell 5.1 coupe l'instruction, PowerShell 7 peut continuer la ligne
     ("echo a`\r\ngit push origin main", "deny"),
@@ -327,7 +349,7 @@ class PowerShell(unittest.TestCase):
     def test_guillemets_typographiques(self):
         # Le vrai analyseur de PowerShell les traite comme ' et " (vérifié avec Parser::ParseInput).
         self.verifier([("Write-Host 'a\u2019 ; git push --force ; \u2019b'", "deny"),
-                       ("git commit -m \u201ca ; git push --force\u201d", "ask")])
+                       ("git commit -m \u201ca ; git push --force\u201d", None)])
 
     def test_redirections(self):
         # Une redirection n'est pas un argument de git : elle ne change pas la décision.
@@ -401,7 +423,8 @@ class ProcessusPowerShell(unittest.TestCase):
 
     def test_decisions(self):
         for commande, attendu in [("git push --force", "deny"),
-                                  ("git commit -m @'\nTitre : git push --force\n'@", "ask"),
+                                  ("git reset --hard", "ask"),
+                                  ("git commit -m @'\nTitre : git push --force\n'@", None),
                                   ("git status", None)]:
             with self.subTest(commande=commande):
                 self.assertEqual(lancer(evenement(commande, tool_name="PowerShell")), (0, attendu))

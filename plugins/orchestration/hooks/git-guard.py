@@ -12,12 +12,16 @@ redirections, et les programmes qui lancent du code (`cmd /c`, `bash -c`,
 - `deny` : push forcé (`--force`, `-f`, `--force-with-lease`, `+refspec`,
   `--mirror`), push groupé (`--all`, `--branches`) ou vers une branche protégée
   (main, master, develop, release/*, support/*).
-- `ask` : toute autre écriture Git (commit, push, reset, rebase, merge, pull,
-  cherry-pick, revert, checkout, switch, restore, clean, add, rm, mv, stash hors
-  list/show, création ou suppression de tag ou de branche, config et remote en
-  écriture) ; pour l'outil PowerShell, une commande trop imbriquée pour être
-  analysée (plus de PROFONDEUR_MAX groupements).
+- `ask` : ce qui efface du travail non enregistré ou une branche, sans retour
+  simple : `reset --hard`, `clean` (hors `--dry-run`), `checkout` et `switch`
+  forcés (`--force`, `--discard-changes`), `checkout` ou `restore` de tout
+  l'arbre (`.`, `:/`, `*`), `stash drop` et `stash clear`, suppression forcée de
+  branche (`branch -D`) ; pour l'outil PowerShell, une commande trop imbriquée
+  pour être analysée (plus de PROFONDEUR_MAX groupements).
 - Rien sinon : aucune sortie, la décision revient aux permissions habituelles.
+  Les écritures courantes en font partie (add, commit, rebase, merge, pull,
+  checkout d'une branche ou de fichiers nommés, push vers une branche non
+  protégée…) : demander à chacune arrêtait les sessions sans rien protéger.
 
 Le hook ne renvoie jamais `allow`. Une entrée invalide ou une erreur interne ne
 produit aucune décision : jamais de blocage involontaire.
@@ -45,22 +49,8 @@ SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 # Options globales de Git suivies d'une valeur séparée.
 GLOBALES_AVEC_VALEUR = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path"}
 
-ECRITURES_SIMPLES = {
-    "commit": "commit",
-    "reset": "reset",
-    "rebase": "rebase",
-    "merge": "merge",
-    "pull": "pull",
-    "cherry-pick": "cherry-pick",
-    "revert": "revert",
-    "checkout": "checkout",
-    "switch": "switch",
-    "restore": "restore",
-    "clean": "clean",
-    "add": "add",
-    "rm": "rm",
-    "mv": "mv",
-}
+# Chemins qui désignent tout l'arbre de travail : les restaurer efface toutes les modifications.
+TOUT_L_ARBRE = {".", "./", ".\\", ":/", "*"}
 
 RANG = {None: 0, "ask": 1, "deny": 2}
 
@@ -727,61 +717,65 @@ def analyser_push(args: List[str], globales: List[str], cwd: str) -> Decision:
         courante = branche_courante(repertoire(globales, cwd))
         if courante and PROTEGEES.match(courante):
             return "deny", f"push implicite depuis la branche protégée {courante} interdit"
-        return "ask", "push sans branche explicite : à autoriser pour ce push précis (dépôt, branche, commits)"
-    return "ask", "push : à autoriser pour ce push précis (dépôt, branche, commits)"
+    return None
+
+
+def analyser_reset(args: List[str]) -> Decision:
+    if a_option(args, ["--hard"]):
+        return "ask", "git reset --hard efface les modifications non enregistrées"
+    return None
+
+
+def analyser_clean(args: List[str]) -> Decision:
+    if a_option(args, ["--dry-run"], "n"):
+        return None
+    return "ask", "git clean supprime les fichiers non suivis"
+
+
+def analyser_checkout(args: List[str]) -> Decision:
+    if a_option(args, ["--force"], "f"):
+        return "ask", "git checkout --force écrase les modifications locales"
+    if any(arg in TOUT_L_ARBRE for arg in args):
+        return "ask", "git checkout de tout l'arbre efface les modifications non enregistrées"
+    return None
+
+
+def analyser_switch(args: List[str]) -> Decision:
+    if a_option(args, ["--force", "--discard-changes"], "f"):
+        return "ask", "git switch forcé efface les modifications locales"
+    return None
+
+
+def analyser_restore(args: List[str]) -> Decision:
+    if a_option(args, ["--staged"], "S") and not a_option(args, ["--worktree"], "W"):
+        return None  # l'index seul : les fichiers ne changent pas
+    if any(arg in TOUT_L_ARBRE for arg in args):
+        return "ask", "git restore de tout l'arbre efface les modifications non enregistrées"
+    return None
 
 
 def analyser_stash(args: List[str]) -> Decision:
-    if args and args[0] in {"list", "show"}:
-        return None
-    return "ask", "git stash modifie l'arbre de travail"
-
-
-def analyser_tag(args: List[str]) -> Decision:
-    if a_option(args, ["--delete", "--annotate", "--sign", "--local-user", "--force", "--message", "--file"], "dasufmF"):
-        return "ask", "création ou suppression de tag"
-    lecture = a_option(args, ["--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--verify"], "lnv")
-    if positionnels(args, ["--sort", "--format", "--contains", "--points-at", "--merged", "--no-merged", "--color", "--column"]) and not lecture:
-        return "ask", "création de tag"
+    if args and args[0] in {"drop", "clear"}:
+        return "ask", f"git stash {args[0]} efface du travail remisé"
     return None
 
 
 def analyser_branche(args: List[str]) -> Decision:
-    if a_option(
-        args,
-        ["--delete", "--move", "--copy", "--force", "--set-upstream-to", "--unset-upstream", "--edit-description", "--track", "--no-track"],
-        "dDmMcCfut",
-    ):
-        return "ask", "création, déplacement ou suppression de branche"
-    lecture = a_option(
-        args,
-        ["--list", "--all", "--remotes", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--show-current", "--verbose"],
-        "larv",
-    )
-    if positionnels(args, ["--sort", "--format", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--color", "--column"]) and not lecture:
-        return "ask", "création de branche"
+    if a_option(args, [], "D") or (a_option(args, ["--delete"], "d") and a_option(args, ["--force"], "f")):
+        return "ask", "suppression forcée de branche"
     return None
 
 
-def analyser_config(args: List[str]) -> Decision:
-    if args and args[0] in {"set", "unset", "rename-section", "remove-section", "edit"}:
-        return "ask", "écriture de configuration Git"
-    if args and args[0] in {"get", "list"}:
-        return None
-    if a_option(args, ["--unset", "--unset-all", "--add", "--replace-all", "--rename-section", "--remove-section", "--edit"], "e"):
-        return "ask", "écriture de configuration Git"
-    if a_option(args, ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "--get-color", "--get-colorbool"], "l"):
-        return None
-    if len(positionnels(args, ["--file", "-f", "--blob", "--type", "--default", "--comment"])) >= 2:
-        return "ask", "écriture de configuration Git"
-    return None
-
-
-def analyser_remote(args: List[str]) -> Decision:
-    pos = positionnels(args)
-    if pos and pos[0] in {"add", "remove", "rm", "rename", "set-url", "set-head", "set-branches", "prune"}:
-        return "ask", f"git remote {pos[0]} modifie la configuration des dépôts distants"
-    return None
+# Sous-commandes qui peuvent effacer du travail. Les autres écritures (add, commit, rebase, merge…) ne décident rien.
+DESTRUCTRICES = {
+    "reset": analyser_reset,
+    "clean": analyser_clean,
+    "checkout": analyser_checkout,
+    "switch": analyser_switch,
+    "restore": analyser_restore,
+    "stash": analyser_stash,
+    "branch": analyser_branche,
+}
 
 
 def analyser(globales: List[str], args: List[str], cwd: str) -> Decision:
@@ -790,18 +784,8 @@ def analyser(globales: List[str], args: List[str], cwd: str) -> Decision:
     sous, reste = args[0], args[1:]
     if sous == "push":
         return analyser_push(reste, globales, cwd)
-    if sous in ECRITURES_SIMPLES:
-        return "ask", f"git {ECRITURES_SIMPLES[sous]} écrit dans le dépôt"
-    if sous == "stash":
-        return analyser_stash(reste)
-    if sous == "tag":
-        return analyser_tag(reste)
-    if sous == "branch":
-        return analyser_branche(reste)
-    if sous == "config":
-        return analyser_config(reste)
-    if sous == "remote":
-        return analyser_remote(reste)
+    if sous in DESTRUCTRICES:
+        return DESTRUCTRICES[sous](reste)
     return None
 
 
