@@ -21,20 +21,20 @@ _spec.loader.exec_module(git_guard)
 
 
 # Comme Claude Code : rien n'impose l'UTF-8 à Python (sous Windows, il prendrait cp1252).
-SANS_ENCODAGE_FORCE = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+SANS_ENCODAGE_FORCE = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8", "GIT_GUARD_STRICT")}
 
 
-def lancer_brut(entree: str):
+def lancer_brut(entree: str, **env):
     """Lance le hook comme Claude Code : JSON en UTF-8 sur stdin, sortie lue en UTF-8
     (octets invalides remplacés par U+FFFD). Rend (code de sortie, texte lu)."""
     sortie = subprocess.run([sys.executable, HOOK], input=entree.encode("utf-8"), capture_output=True,
-                            timeout=20, env=SANS_ENCODAGE_FORCE)
+                            timeout=20, env={**SANS_ENCODAGE_FORCE, **env})
     return sortie.returncode, sortie.stdout.decode("utf-8", "replace")
 
 
-def lancer(entree: str):
+def lancer(entree: str, **env):
     """Lance le hook comme Claude Code : rend (code de sortie, décision ou None)."""
-    code, texte = lancer_brut(entree)
+    code, texte = lancer_brut(entree, **env)
     if not texte.strip():
         return code, None
     return code, json.loads(texte)["hookSpecificOutput"]["permissionDecision"]
@@ -113,7 +113,7 @@ class Encodage(unittest.TestCase):
 
 class Analyse(unittest.TestCase):
     def d(self, commande, cwd=""):
-        decision = git_guard.decider(commande, cwd)
+        decision = git_guard.decider(commande, cwd, strict=False)
         return decision[0] if decision else None
 
     def test_enchainements(self):
@@ -186,6 +186,47 @@ class Analyse(unittest.TestCase):
     def test_guillemets_non_fermes(self):
         self.assertEqual(self.d('git clean -fd "x'), "ask")
         self.assertEqual(self.d("git status '"), None)
+
+
+class ModeStrict(unittest.TestCase):
+    """GIT_GUARD_STRICT=1, pour un dépôt partagé : toute écriture Git est demandée."""
+
+    def d(self, commande, shell="posix"):
+        decision = git_guard.decider(commande, "", shell, strict=True)
+        return decision[0] if decision else None
+
+    def test_ecritures_demandees(self):
+        for commande in ["git add f", "git commit -m x", "git rebase origin/dev", "git merge x", "git pull",
+                         "git cherry-pick a", "git revert a", "git checkout x", "git switch -c y", "git restore f",
+                         "git reset --soft HEAD~1", "git clean -nd", "git rm f", "git mv a b", "git stash",
+                         "git stash pop", "git tag v1", "git tag -d v1", "git branch nouvelle", "git branch -d x",
+                         "git config user.name x", "git config --unset a.b", "git config set a.b c",
+                         "git remote add o url", "git remote set-url o url", "git push -u origin feature/x",
+                         "git reset --hard", "git checkout -- ."]:
+            with self.subTest(commande=commande):
+                self.assertEqual(self.d(commande), "ask")
+
+    def test_refus_et_lectures_inchanges(self):
+        for commande in ["git push --force origin x", "git push origin main", "git add a && git push -f origin x"]:
+            with self.subTest(commande=commande):
+                self.assertEqual(self.d(commande), "deny")
+        for commande in ["git status", "git log --oneline", "git diff", "git stash list", "git tag", "git branch -a",
+                         "git config --get user.name", "git remote -v", "git fetch origin"]:
+            with self.subTest(commande=commande):
+                self.assertEqual(self.d(commande), None)
+
+    def test_powershell(self):
+        self.assertEqual(self.d("if ($true) { git commit -m x }", "powershell"), "ask")
+        self.assertEqual(self.d("git commit -m 'x' ; git push --force", "powershell"), "deny")
+
+    def test_variable_d_environnement(self):
+        # Le vrai processus : la variable seule change la décision d'une écriture courante.
+        commit = evenement('git commit -m "x"')
+        for valeur in ("1", " OUI "):
+            with self.subTest(valeur=valeur):
+                self.assertEqual(lancer(commit, GIT_GUARD_STRICT=valeur), (0, "ask"))
+        self.assertEqual(lancer(commit, GIT_GUARD_STRICT="0"), (0, None))
+        self.assertEqual(lancer(commit), (0, None))
 
 
 # --- Outil PowerShell ---------------------------------------------------------
@@ -311,7 +352,7 @@ class PowerShell(unittest.TestCase):
     """Découpage PowerShell et programmes reconnus : decider(commande, cwd, shell="powershell")."""
 
     def d(self, commande, cwd=""):
-        decision = git_guard.decider(commande, cwd, shell="powershell")
+        decision = git_guard.decider(commande, cwd, shell="powershell", strict=False)
         return decision[0] if decision else None
 
     def verifier(self, cas):
