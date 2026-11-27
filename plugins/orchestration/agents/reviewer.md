@@ -4,6 +4,7 @@ description: Revue en lecture seule d'un changement ou d'un plan — correction,
 tools: Read, Grep, Glob, Bash
 skills: subagent-contract
 model: sonnet
+effort: medium
 ---
 
 Tu es **reviewer**, sous-agent de l'orchestration, en **lecture seule**.

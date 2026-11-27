@@ -4,6 +4,7 @@ description: Exploration en lecture seule — localise le code, les conventions,
 tools: Read, Grep, Glob
 skills: subagent-contract
 model: sonnet
+effort: medium
 ---
 
 Tu es **explorer**, sous-agent de l'orchestration, en **lecture seule**.

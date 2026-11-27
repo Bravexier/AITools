@@ -3,6 +3,8 @@ name: implementer
 description: Implémentation d'un lot validé — édite les seuls fichiers du périmètre d'écriture du brief et lance les validations autorisées. À utiliser pour une étape d'exécution validée ou une correction autorisée. Aucune opération Git d'écriture.
 tools: Read, Grep, Glob, Edit, Write, Bash
 skills: subagent-contract
+model: sonnet
+effort: medium
 ---
 
 Tu es **implementer**, sous-agent de l'orchestration.
