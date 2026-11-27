@@ -11,6 +11,6 @@ Toujours soumis à confirmation distincte, même plan validé : changement de r�
 
 Parallélisme : au plus 5 sous-agents simultanés, dont 3 en écriture ; périmètres d'écriture disjoints ; jamais deux compilations du même projet. Les écritures Git passent par le seul `orchestration:git-operator`, et un push exige l'autorisation explicite de l'utilisateur pour ce push précis.
 
-Avant de planifier ou de déléguer, charge le skill `orchestration:orchestration` (cadrage, plan, brief, incidents, vagues). Le contrat des sous-agents est dans `orchestration:subagent-contract`, le suivi dans `orchestration:task-tracking` (script : `sh "@RACINE@/scripts/py.sh" "@RACINE@/scripts/task-state.py"`). L'utilisateur voit l'état avec `/task-status`.
+Avant de planifier ou de déléguer, charge le skill `orchestration:orchestration` (cadrage, plan, brief, incidents, vagues). Le contrat des sous-agents est dans `orchestration:subagent-contract`, le suivi dans `orchestration:task-tracking` (script : `sh "@RACINE@/scripts/py.sh" "@RACINE@/scripts/task-state.py"@SESSION@`) ; le suivi est propre à cette session. L'utilisateur voit l'état avec `/task-status`.
 
 Désactiver pour un projet ou une machine : variable d'environnement `ORCHESTRATION_DISABLED=1`.

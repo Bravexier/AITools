@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -9,6 +11,7 @@ import unittest
 
 ICI = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(ICI, "..", "scripts", "task-state.py")
+HOOK = os.path.join(ICI, "..", "hooks", "session-context.py")
 
 
 class Suivi(unittest.TestCase):
@@ -180,6 +183,133 @@ class Suivi(unittest.TestCase):
         code, _, erreur = self.cmd("patch", "--expected-revision", str(rev), data={"task": {"lastMessage": "x"}})
         self.assertEqual(code, 0, erreur)
         self.assertFalse(os.path.exists(verrou))
+
+
+class Sessions(unittest.TestCase):
+    """Un suivi par session : le fichier d'état dépend de l'identifiant de session, pas du seul dossier."""
+
+    def setUp(self):
+        self.dossier = tempfile.TemporaryDirectory()
+        self.tmp = self.dossier.name
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in ("TASK_STATE_FILE", "CLAUDE_CODE_SESSION_ID", "ORCHESTRATION_DISABLED")}
+        self.env["CLAUDE_PROJECT_DIR"] = self.tmp
+
+    def tearDown(self):
+        self.dossier.cleanup()
+
+    def lancer(self, script, *args, stdin="", env=None):
+        sortie = subprocess.run([sys.executable, script, *args], input=stdin, capture_output=True, text=True,
+                                encoding="utf-8", timeout=20, cwd=self.tmp, env=env or self.env)
+        return sortie.returncode, sortie.stdout, sortie.stderr
+
+    def cmd(self, options, *args, data=None, stdin="", env=None):
+        args = list(args)
+        if data is not None:
+            args += ["--data", json.dumps(data)]
+        return self.lancer(SCRIPT, *options, *args, stdin=stdin, env=env)
+
+    def options_de_session(self, sid):
+        """Options de task-state.py que le hook SessionStart montre à une session."""
+        entree = json.dumps({"session_id": sid, "hook_event_name": "SessionStart", "source": "startup", "cwd": self.tmp})
+        code, sortie, erreur = self.lancer(HOOK, stdin=entree)
+        self.assertEqual(code, 0, erreur)
+        trouve = re.search(r'task-state\.py"([^`]*)`', sortie)
+        self.assertIsNotNone(trouve, "commande task-state.py introuvable dans le contexte de session")
+        return shlex.split(trouve.group(1))
+
+    def etat(self, titre):
+        return {"task": {"title": titre}, "subtasks": [{"id": "1", "title": "Lot", "weight": 1}]}
+
+    def test_deux_sessions_du_meme_dossier_ont_chacune_leur_suivi(self):
+        options = {sid: self.options_de_session(sid) for sid in ("sess-a", "sess-b")}
+        for sid, opts in options.items():
+            code, _, erreur = self.cmd(opts, "update", "--expected-revision", "0", data=self.etat("Tâche " + sid))
+            self.assertEqual(code, 0, f"{sid} : {erreur}")
+        for sid, opts in options.items():
+            code, sortie, erreur = self.cmd(opts, "read")
+            self.assertEqual(code, 0, erreur)
+            self.assertEqual(json.loads(sortie)["task"]["title"], "Tâche " + sid)
+
+    def test_evenement_observe_va_a_la_session_qui_l_emet(self):
+        opts_a = self.options_de_session("sess-a")
+        code, _, erreur = self.cmd(opts_a, "update", "--expected-revision", "0", data=self.etat("Tâche A"))
+        self.assertEqual(code, 0, erreur)
+        for sid, agent, type_agent in (("sess-a", "x1", "implementer"), ("sess-b", "x2", "reviewer")):
+            entree = json.dumps({"session_id": sid, "hook_event_name": "SubagentStart",
+                                 "agent_id": agent, "agent_type": type_agent})
+            self.assertEqual(self.cmd([], "observe", stdin=entree)[0], 0)
+        code, sortie, erreur = self.cmd(opts_a, "show")
+        self.assertEqual(code, 0, erreur)
+        self.assertIn("SubagentStart implementer (x1)", sortie)
+        self.assertNotIn("reviewer", sortie)
+
+    def test_identifiant_de_session_invalide_refuse_sans_rien_creer(self):
+        for sid in ("../x", ""):
+            with self.subTest(session=sid):
+                code, _, erreur = self.cmd(["--session", sid], "update", "--expected-revision", "0", data=self.etat("X"))
+                self.assertEqual(code, 2)
+                self.assertFalse(os.path.exists(os.path.join(self.tmp, ".claude")))
+                self.assertIn("1 à 128", erreur or "")
+
+    def test_sans_session_ni_variable_ancien_chemin(self):
+        code, _, erreur = self.cmd([], "update", "--expected-revision", "0", data=self.etat("Ancien"))
+        self.assertEqual(code, 0, erreur)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, ".claude", "state", "task.json")))
+
+    def test_variable_de_session_donne_le_dossier_de_session(self):
+        env = {**self.env, "CLAUDE_CODE_SESSION_ID": "sess-c"}
+        code, _, erreur = self.cmd([], "update", "--expected-revision", "0", data=self.etat("Var"), env=env)
+        self.assertEqual(code, 0, erreur)
+        etat = os.path.join(self.tmp, ".claude", "state")
+        self.assertTrue(os.path.exists(os.path.join(etat, "sessions", "sess-c", "task.json")))
+        self.assertFalse(os.path.exists(os.path.join(etat, "task.json")))
+
+    def test_show_signale_l_ancien_suivi_du_dossier(self):
+        code, _, erreur = self.cmd([], "update", "--expected-revision", "0", data=self.etat("Ancien"))
+        self.assertEqual(code, 0, erreur)
+        code, sortie, erreur = self.cmd(["--session", "sess-d"], "show")
+        self.assertEqual(code, 0, erreur)
+        self.assertIn(".claude/state/task.json", sortie.replace("\\", "/"))
+        self.assertIn("--file", sortie)
+
+    def fichiers_sous(self, racine):
+        return sorted(os.path.relpath(os.path.join(d, f), racine) for d, _, fs in os.walk(racine) for f in fs)
+
+    def test_observe_avec_session_invalide_n_ecrit_nulle_part(self):
+        code, _, erreur = self.cmd([], "update", "--expected-revision", "0", data=self.etat("Ancien"))
+        self.assertEqual(code, 0, erreur)
+        avant = self.fichiers_sous(self.tmp)
+        entree = json.dumps({"session_id": "../x", "hook_event_name": "SubagentStart",
+                             "agent_id": "x1", "agent_type": "implementer"})
+        code, _, erreur = self.cmd([], "observe", stdin=entree)
+        self.assertEqual(code, 0, erreur)
+        self.assertEqual(self.fichiers_sous(self.tmp), avant)
+        self.assertFalse([f for f in self.fichiers_sous(self.tmp) if f.endswith("observed.jsonl")])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".claude", "state", "sessions")))
+
+    def test_variable_de_session_invalide_ignoree(self):
+        env = {**self.env, "CLAUDE_CODE_SESSION_ID": "../x"}
+        code, _, erreur = self.cmd([], "update", "--expected-revision", "0", data=self.etat("Ancien"), env=env)
+        self.assertEqual(code, 0, erreur)
+        etat = os.path.join(self.tmp, ".claude", "state")
+        self.assertTrue(os.path.exists(os.path.join(etat, "task.json")))
+        self.assertFalse(os.path.exists(os.path.join(etat, "sessions")))
+
+    def test_file_puis_variable_fichier_l_emportent_sur_la_session(self):
+        explicite = os.path.join(self.tmp, "f", "explicite.json")
+        via_env = os.path.join(self.tmp, "e", "env.json")
+        env = {**self.env, "CLAUDE_CODE_SESSION_ID": "sess-e"}
+        code, _, erreur = self.cmd(["--file", explicite, "--session", "sess-f"], "update",
+                                   "--expected-revision", "0", data=self.etat("F"), env={**env, "TASK_STATE_FILE": via_env})
+        self.assertEqual(code, 0, erreur)
+        self.assertTrue(os.path.exists(explicite))
+        self.assertFalse(os.path.exists(via_env))
+        code, _, erreur = self.cmd(["--session", "sess-f"], "update", "--expected-revision", "0",
+                                   data=self.etat("E"), env={**env, "TASK_STATE_FILE": via_env})
+        self.assertEqual(code, 0, erreur)
+        self.assertTrue(os.path.exists(via_env))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".claude", "state", "sessions")))
 
 
 if __name__ == "__main__":

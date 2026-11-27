@@ -1,6 +1,6 @@
 {
   "name": "orchestration",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Travail à plusieurs agents : un orchestrateur qui cadre, fait valider un plan complet et supervise ; des sous-agents bornés (explorer, implementer, reviewer, tester, git-operator) ; Git protégé par hook ; suivi de tâche pondéré et versionné.",
   "license": "MIT"
 }

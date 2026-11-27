@@ -48,7 +48,7 @@ Aucun agent n'a l'outil de délégation (`Agent`) : seul l'orchestrateur enchaî
 | Garde-fou Git | `hooks/git-guard.py`, hook `PreToolUse` (Bash et PowerShell) | `ask` / `deny`, voir plus bas |
 | Suivi | `scripts/task-state.py` | `read`, `patch`, `update`, `show`, `observe` |
 | Commande | `commands/task-status.md` | `/task-status` (ou `/orchestration:task-status`) |
-| Observation | hooks `SubagentStart` / `SubagentStop` | Événements de l'hôte notés à part, dans `.claude/state/observed.jsonl` |
+| Observation | hooks `SubagentStart` / `SubagentStop` | Événements de l'hôte notés à part, dans `observed.jsonl`, dans le dossier de la session |
 
 Les scripts sont en Python 3.8+ (bibliothèque standard seulement), lancés par `scripts/py.sh` qui essaie `python3`, `python` puis `py` : sous Windows, l'alias `python3` du Microsoft Store est écarté s'il ne fonctionne pas.
 
@@ -66,7 +66,7 @@ Le hook ne renvoie jamais `allow` : il ne contourne pas les permissions. Sans Py
 
 ## Suivi de tâche
 
-État dans `.claude/state/task.json` du projet (à ignorer dans Git si besoin) : tâche maître, sous-tâches pondérées avec parent et dépendances, attente typée (`user|agents|external`), agents déclarés. Progression globale = moyenne pondérée **des seules feuilles** ; `pending` = 0, `done` = 100 ; la tâche ne passe `done` que si tout est fini, sans agent actif ni attente. Toute écriture exige `--expected-revision` : une révision périmée est rejetée (code 3), à relire et réconcilier. Détails : [`skills/task-tracking/SKILL.md`](skills/task-tracking/SKILL.md).
+État de chaque session dans `.claude/state/sessions/<session>/task.json` du projet (à ignorer dans Git si besoin ; `/task-status` n'affiche que la tâche de la session où on le tape). L'ancien `.claude/state/task.json` sert encore quand aucun identifiant de session n'est connu ; `--file` force un chemin. Un nouvel identifiant de session (`/clear`, `--fork-session`) ouvre un suivi vide ; l'ancien reste lisible avec `--session <ancien>`. L'état contient la tâche maître, sous-tâches pondérées avec parent et dépendances, attente typée (`user|agents|external`), agents déclarés. Progression globale = moyenne pondérée **des seules feuilles** ; `pending` = 0, `done` = 100 ; la tâche ne passe `done` que si tout est fini, sans agent actif ni attente. Toute écriture exige `--expected-revision` : une révision périmée est rejetée (code 3), à relire et réconcilier. Détails : [`skills/task-tracking/SKILL.md`](skills/task-tracking/SKILL.md).
 
 ```text
 /task-status
@@ -84,7 +84,7 @@ agents — tests du lot A (depuis …)
 - implementer (a1) : running depuis … → 1.2
 ```
 
-Avec le plugin [`suivi-demande`](../suivi-demande/README.md), l'orchestrateur reporte les mêmes jalons dans la page publiée ; `task.json` reste la source de vérité.
+Avec le plugin [`suivi-demande`](../suivi-demande/README.md), l'orchestrateur reporte les mêmes jalons dans la page publiée ; le fichier d'état de la session reste la source de vérité.
 
 ## Désactiver
 

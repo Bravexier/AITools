@@ -1,15 +1,17 @@
 ---
 name: task-tracking
-description: Tenir le suivi de la tâche orchestrée dans .claude/state/task.json — modèle, progression pondérée des feuilles, attente typée, agents déclarés, révisions et cadence des mises à jour. À charger avant d'initialiser ou de mettre à jour le suivi.
+description: Tenir le suivi de la tâche orchestrée dans .claude/state/sessions/<session>/task.json — modèle, progression pondérée des feuilles, attente typée, agents déclarés, révisions et cadence des mises à jour. À charger avant d'initialiser ou de mettre à jour le suivi.
 ---
 
 # Suivi de tâche
 
-L'état vit dans `.claude/state/task.json` du projet. Il n'est jamais édité à la main : seul le script l'écrit, sous verrou, avec contrôle de révision.
+L'état de chaque session vit dans `.claude/state/sessions/<session>/task.json` du projet. Il n'est jamais édité à la main : seul le script l'écrit, sous verrou, avec contrôle de révision.
 
 ```bash
-sh "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/task-state.py" read
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/task-state.py" --session "${CLAUDE_SESSION_ID}" read
 ```
+
+La commande donnée par le contexte de session porte déjà `--session` : reprends-la telle quelle. `--file` force un chemin. Sans identifiant de session connu, l'ancien `.claude/state/task.json` sert encore. `observed.jsonl` est dans le dossier de la session.
 
 | Commande | Effet |
 |---|---|
@@ -68,7 +70,7 @@ Si l'outil `mcp__suivi-demande__suivre` (plugin suivi-demande) est présent, rep
 ## Exemple
 
 ```bash
-sh "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/task-state.py" patch --expected-revision 4 --data '{
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/task-state.py" --session "${CLAUDE_SESSION_ID}" patch --expected-revision 4 --data '{
   "subtasks": [{"id": "1.1", "status": "done"}, {"id": "1.2", "status": "in_progress", "progress": 30}],
   "agents": [{"id": "a2", "status": "completed"}],
   "task": {"lastMessage": "Vague 1 : lot A livré, tests en cours", "remainingMinutes": 25}
