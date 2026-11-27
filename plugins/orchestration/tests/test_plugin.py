@@ -67,10 +67,31 @@ class Hooks(unittest.TestCase):
             for chemin in re.findall(r'\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"', commande):
                 self.assertTrue(os.path.exists(os.path.join(RACINE, chemin)), chemin)
 
-    def contexte(self, **env):
+    def contexte(self, entree="", **env):
+        # Le hook lit stdin (session_id) : on le fournit toujours, même vide.
         sortie = subprocess.run([sys.executable, os.path.join(RACINE, "hooks", "session-context.py")],
-                                capture_output=True, text=True, timeout=20, env={**os.environ, **env})
+                                input=entree, capture_output=True, text=True, encoding="utf-8", timeout=20,
+                                env={**os.environ, **env})
         return sortie.returncode, sortie.stdout
+
+    def test_contexte_montre_la_session_dans_la_commande(self):
+        code, texte = self.contexte(json.dumps({"session_id": "sess-a", "hook_event_name": "SessionStart"}),
+                                    ORCHESTRATION_DISABLED="")
+        self.assertEqual(code, 0)
+        self.assertIn('task-state.py" --session sess-a`', texte)
+
+    def test_contexte_sans_session_valide_reste_sans_option(self):
+        for entree in ("", json.dumps({"session_id": "../x"})):
+            with self.subTest(entree=entree):
+                code, texte = self.contexte(entree, ORCHESTRATION_DISABLED="")
+                self.assertEqual(code, 0)
+                self.assertIn('task-state.py"`', texte)
+                self.assertNotIn("--session", texte)
+
+    def test_commande_task_status_cible_la_session(self):
+        with open(os.path.join(RACINE, "commands", "task-status.md"), encoding="utf-8") as f:
+            texte = f.read()
+        self.assertIn('task-state.py" --session "${CLAUDE_SESSION_ID}" show`', texte)
 
     def test_contexte_de_session(self):
         code, texte = self.contexte(ORCHESTRATION_DISABLED="")

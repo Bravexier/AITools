@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Suivi de tâche de l'orchestrateur : un fichier JSON versionné et verrouillé.
 
-Fichier : --file, sinon $TASK_STATE_FILE, sinon
-$CLAUDE_PROJECT_DIR/.claude/state/task.json, sinon ./.claude/state/task.json.
+Fichier, par priorité : --file, $TASK_STATE_FILE, la session, l'ancien chemin.
+La session est --session ID (placé avant la sous-commande) ; pour `observe`, à
+défaut le `session_id` du JSON reçu ; sinon $CLAUDE_CODE_SESSION_ID. Un
+identifiant respecte [A-Za-z0-9_-]{1,128}. Fichier de session :
+<projet>/.claude/state/sessions/<ID>/task.json, `observed.jsonl` et les verrous
+dans le même dossier. Sans identifiant connu, l'ancien chemin sert encore :
+<projet>/.claude/state/task.json. Le projet est $CLAUDE_PROJECT_DIR, sinon le
+dossier courant.
 
 Commandes :
   read                              état complet, avec `revision` et `progress`
@@ -33,6 +39,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -57,11 +64,32 @@ def maintenant() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def chemin_par_defaut() -> str:
+SESSION_VALIDE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def session_valide(identifiant: Any) -> bool:
+    return isinstance(identifiant, str) and SESSION_VALIDE.fullmatch(identifiant) is not None
+
+
+def dossier_etat() -> str:
+    racine = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return os.path.join(racine, ".claude", "state")
+
+
+def chemin_ancien() -> str:
+    return os.path.join(dossier_etat(), "task.json")
+
+
+def chemin_par_defaut(session: Optional[str] = None) -> str:
+    """$TASK_STATE_FILE, sinon le fichier de la session (--session, puis
+    $CLAUDE_CODE_SESSION_ID s'il est valide), sinon l'ancien chemin."""
     if os.environ.get("TASK_STATE_FILE"):
         return os.environ["TASK_STATE_FILE"]
-    racine = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    return os.path.join(racine, ".claude", "state", "task.json")
+    if session is None and session_valide(os.environ.get("CLAUDE_CODE_SESSION_ID")):
+        session = os.environ["CLAUDE_CODE_SESSION_ID"]
+    if session is not None:
+        return os.path.join(dossier_etat(), "sessions", session, "task.json")
+    return chemin_ancien()
 
 
 def etat_vide() -> Dict[str, Any]:
@@ -420,13 +448,23 @@ def afficher(chemin: str) -> str:
     return "\n".join(lignes)
 
 
-def observer(chemin: str) -> None:
-    """Note un événement SubagentStart/Stop si une tâche est suivie ; jamais d'erreur."""
+def observer(fichier: Optional[str], session: Optional[str]) -> None:
+    """Note un événement SubagentStart/Stop si une tâche est suivie ; jamais d'erreur.
+
+    Le JSON est lu d'abord : son `session_id` désigne la session, sauf --file,
+    $TASK_STATE_FILE ou --session. Un `session_id` invalide : rien n'est fait.
+    """
     try:
-        if not os.path.exists(chemin):
-            return
         evenement = json.loads(sys.stdin.read() or "null")
         if not isinstance(evenement, dict):
+            return
+        chemin = fichier
+        if chemin is None and session is None and evenement.get("session_id") is not None:
+            if not session_valide(evenement["session_id"]):
+                return
+            session = evenement["session_id"]
+        chemin = chemin or chemin_par_defaut(session)
+        if not os.path.exists(chemin):
             return
         ligne = {
             "at": maintenant(),
@@ -460,8 +498,17 @@ def donnees(arguments) -> Any:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Entrées et sorties en UTF-8 : sous Windows, Python les prendrait sinon en cp1252.
+    for flux in (sys.stdin, sys.stdout, sys.stderr):
+        if (getattr(flux, "encoding", None) or "").lower() not in {"utf-8", "utf8"}:
+            try:
+                flux.reconfigure(encoding="utf-8")
+            except Exception:
+                pass
     analyseur = argparse.ArgumentParser(description="Suivi de tâche de l'orchestrateur.")
-    analyseur.add_argument("--file", default=None, help="fichier d'état (défaut : .claude/state/task.json du projet)")
+    analyseur.add_argument("--file", default=None, help="fichier d'état (prioritaire sur la session)")
+    analyseur.add_argument("--session", default=None,
+                           help="identifiant de session : .claude/state/sessions/<ID>/task.json du projet")
     sous = analyseur.add_subparsers(dest="commande", required=True)
     sous.add_parser("read")
     sous.add_parser("show")
@@ -471,24 +518,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         p.add_argument("--expected-revision", type=int, required=True)
         p.add_argument("--data", default=None, help="JSON ; sinon lu sur stdin")
     arguments = analyseur.parse_args(argv)
-    chemin = arguments.file or chemin_par_defaut()
+    if arguments.session is not None and not session_valide(arguments.session):
+        print("task-state : --session invalide (attendu : lettres, chiffres, _ ou -, 1 à 128 caractères)", file=sys.stderr)
+        return 2
+    chemin = arguments.file or (None if arguments.commande == "observe" else chemin_par_defaut(arguments.session))
 
-    # Entrées et sorties en UTF-8 : sous Windows, Python les prendrait sinon en cp1252.
-    for flux in (sys.stdin, sys.stdout, sys.stderr):
-        if (getattr(flux, "encoding", None) or "").lower() not in {"utf-8", "utf8"}:
-            try:
-                flux.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
     try:
         if arguments.commande == "observe":
-            observer(chemin)
+            observer(arguments.file or os.environ.get("TASK_STATE_FILE") or None, arguments.session)
             return 0
         if arguments.commande == "read":
             print(json.dumps(avec_progression(lire(chemin)), ensure_ascii=False, indent=2))
             return 0
         if arguments.commande == "show":
             print(afficher(chemin))
+            ancien = chemin_ancien()
+            if (not arguments.file and not os.environ.get("TASK_STATE_FILE") and not os.path.exists(chemin)
+                    and os.path.exists(ancien)):
+                print(f"\nUn ancien suivi existe : {ancien.replace(os.sep, '/')} (hors session). "
+                      f'Pour le lire : --file "{ancien.replace(os.sep, "/")}" show')
             return 0
         charge = donnees(arguments)
         if not isinstance(charge, dict):
