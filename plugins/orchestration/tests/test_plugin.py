@@ -44,7 +44,7 @@ class Agents(unittest.TestCase):
 class Hooks(unittest.TestCase):
     def test_declarations(self):
         hooks = json.load(open(os.path.join(RACINE, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]
-        self.assertEqual(hooks["PreToolUse"][0]["matcher"], "Bash")
+        self.assertEqual(hooks["PreToolUse"][0]["matcher"], "Bash|PowerShell")
         for evenement in ("SessionStart", "PreToolUse", "SubagentStart", "SubagentStop"):
             commande = hooks[evenement][0]["hooks"][0]["command"]
             for chemin in re.findall(r'\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"', commande):
